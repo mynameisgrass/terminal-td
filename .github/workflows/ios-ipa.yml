@@ -1,0 +1,88 @@
+name: Build iOS IPA & Test
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Python & JS Engine Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Python unit & PTY tests
+        run: python3 -m unittest -v test_td.py
+
+      - name: Verify JS syntax & data export
+        run: |
+          python3 scripts/export_web_data.py
+          for f in ios/TerminalTD/www/*.js; do
+            node --check "$f"
+          done
+
+  build-ipa:
+    name: Build Unsigned iOS IPA
+    needs: test
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+
+      - name: Generate Xcode project & build TerminalTD.app
+        working-directory: ios/TerminalTD
+        run: |
+          xcodegen generate
+          xcodebuild \
+            -project TerminalTD.xcodeproj \
+            -scheme TerminalTD \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package Unsigned IPA
+        run: |
+          APP_PATH="ios/TerminalTD/build/Build/Products/Release-iphoneos/TerminalTD.app"
+          test -d "$APP_PATH"
+          test -f "$APP_PATH/www/index.html"
+          mkdir -p dist Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry dist/BastionTD-unsigned.ipa Payload
+          ls -lh dist/BastionTD-unsigned.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BastionTD-iOS-IPA
+          path: dist/BastionTD-unsigned.ipa
+          retention-days: 90
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Bastion TD iOS IPA (v1.0.${{ github.run_number }})
+          body: |
+            Unsigned iOS `.ipa` build of **Bastion TD** (48 Gacha Units, 52 Enemies, 10 Bosses, 5 Maps, 1x-10x Speed, Auto-Wave, Prestart).
+            Install on iPhone via **Sideloadly**, **AltStore**, **SideStore**, or **TrollStore**.
+          files: dist/BastionTD-unsigned.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

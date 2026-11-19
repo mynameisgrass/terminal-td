@@ -1,0 +1,112 @@
+"""Selectable Gacha Summon Banners with distinct pools, boosts, and pity."""
+
+from __future__ import annotations
+
+from typing import Dict, Tuple
+
+from game.models import BannerDef
+
+
+BANNERS: Dict[str, BannerDef] = {
+    "standard": BannerDef(
+        key="standard",
+        name="Standard Banner",
+        description="All 48 units | Balanced rates | 10x guarantees Epic+ | Mythic pity @60",
+        single_cost=100,
+        multi_cost=900,
+        min_10x_rarity="epic",
+        rarity_weights={
+            "common": 46.0,
+            "rare": 28.0,
+            "epic": 16.0,
+            "legendary": 7.5,
+            "mythic": 2.0,
+            "transcendent": 0.5,
+        },
+        featured_keys=("sun_temple", "phoenix_tower", "golden_bank"),
+        featured_boost=2.0,
+        pity_mythic_at=60,
+    ),
+    "warfare": BannerDef(
+        key="warfare",
+        name="Warfare & Boss-Killer",
+        description="3x Rate-Up: Sun Avatar, Abyss Reaper, Accelerator, Railgunner, Executioner",
+        single_cost=125,
+        multi_cost=1125,
+        min_10x_rarity="epic",
+        rarity_weights={
+            "common": 38.0,
+            "rare": 30.0,
+            "epic": 20.0,
+            "legendary": 9.0,
+            "mythic": 2.4,
+            "transcendent": 0.6,
+        },
+        featured_keys=(
+            "sun_temple",
+            "abyss_reaper",
+            "eclipse_reaper",
+            "star_striker",
+            "accelerator",
+            "executioner",
+            "longbow_master",
+            "railgun",
+            "tesla_coil",
+            "plasma_sniper",
+            "void_monarch",
+            "astral_lance",
+        ),
+        featured_boost=3.0,
+        pity_mythic_at=50,
+    ),
+    "support": BannerDef(
+        key="support",
+        name="Summoners & Support",
+        description="3x Rate-Up: Eternal Phoenix, Titan Forge, Quantum Bank, Angel Shrine, Commander",
+        single_cost=125,
+        multi_cost=1125,
+        min_10x_rarity="epic",
+        rarity_weights={
+            "common": 38.0,
+            "rare": 30.0,
+            "epic": 20.0,
+            "legendary": 9.0,
+            "mythic": 2.4,
+            "transcendent": 0.6,
+        },
+        featured_keys=(
+            "eternal_phoenix",
+            "quantum_bank",
+            "titan_forge",
+            "angel_shrine",
+            "phoenix_tower",
+            "war_machine",
+            "golden_bank",
+            "commander",
+            "dj_booth",
+        ),
+        featured_boost=3.0,
+        pity_mythic_at=50,
+    ),
+    "mythic_rush": BannerDef(
+        key="mythic_rush",
+        name="MYTHIC CHAOS BANNER",
+        description="NO Commons! 17% Legendary | 6% Mythic | 1.5% Transcendent | 10x = Leg+!",
+        single_cost=250,
+        multi_cost=2250,
+        min_10x_rarity="legendary",
+        rarity_weights={
+            "common": 0.0,
+            "rare": 38.0,
+            "epic": 37.5,
+            "legendary": 17.0,
+            "mythic": 6.0,
+            "transcendent": 1.5,
+        },
+        featured_keys=("void_monarch", "eternal_phoenix", "quantum_bank"),
+        featured_boost=2.5,
+        pity_mythic_at=30,
+    ),
+}
+
+BANNER_ORDER: Tuple[str, ...] = ("standard", "warfare", "support", "mythic_rush")

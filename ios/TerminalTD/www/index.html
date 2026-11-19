@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Bastion TD - Gacha Tower Defense</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar" id="lobby-topbar">
+      <div class="brand">BASTION TD</div>
+      <div class="pill-row">
+        <span class="pill coins" id="hud-coins">Coins: 1000</span>
+        <span class="pill" id="hud-stats">Wins: 0</span>
+        <button class="btn sm" id="btn-mute">SFX: ON</button>
+      </div>
+    </header>
+
+    <!-- LOBBY / SETUP -->
+    <section class="screen active" id="screen-lobby">
+      <div class="grid-2">
+        <div class="card">
+          <h3>1. Select Difficulty</h3>
+          <div class="list-col" id="diff-list"></div>
+        </div>
+        <div class="card">
+          <h3>2. Select Map (36x18 Wide Roads)</h3>
+          <div class="list-col" id="map-list"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <h3 style="margin:0;">3. Your 8-Slot Battle Loadout</h3>
+          <button class="btn good" id="btn-start-battle" style="font-size:15px;padding:10px 20px;">START BATTLE</button>
+        </div>
+        <div class="loadout-grid" id="lobby-loadout"></div>
+      </div>
+    </section>
+
+    <!-- GACHA SUMMONS -->
+    <section class="screen" id="screen-gacha">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <h3 style="margin:0;">Select Summon Banner (48 Collectible Units)</h3>
+          <div class="pill-row">
+            <span class="pill" id="gacha-pity">Mythic Pity: 0/60</span>
+            <button class="btn sm" id="btn-autosell">Auto-Sell: OFF</button>
+          </div>
+        </div>
+        <div class="pill-row" id="banner-tabs" style="margin-top:8px;"></div>
+        <p id="banner-desc" class="subtext" style="margin:8px 0 4px 0;font-size:12px;"></p>
+        <p id="banner-rates" class="subtext" style="margin:0 0 10px 0;"></p>
+        <div class="pill-row">
+          <button class="btn primary" id="btn-roll-1">1x Summon (100c)</button>
+          <button class="btn gold" id="btn-roll-10">10x Mega Summon (900c)</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 id="gacha-result-title">Summon Results</h3>
+        <div class="pulls-grid" id="gacha-pulls"></div>
+      </div>
+    </section>
+
+    <!-- INVENTORY & LOADOUT -->
+    <section class="screen" id="screen-inventory">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <h3 style="margin:0;" id="inv-header">Inventory & Max-8 Loadout</h3>
+          <button class="btn gold sm" id="btn-sell-dupes">Sell All Duplicates</button>
+        </div>
+        <p class="subtext" id="inv-msg" style="margin:6px 0 0 0;color:#4ade80;"></p>
+      </div>
+      <div class="grid-2" id="inv-grid"></div>
+    </section>
+
+    <!-- BESTIARY -->
+    <section class="screen" id="screen-bestiary">
+      <div class="card">
+        <h3>Bestiary: 52 Enemies, 10 Bosses & 11 Friendly Road Units</h3>
+        <div class="grid-2" id="bestiary-grid"></div>
+      </div>
+    </section>
+
+    <!-- BATTLE SCREEN -->
+    <section class="screen" id="screen-battle">
+      <div class="battle-hud">
+        <div class="pill-row">
+          <span class="pill" id="b-wave">W: 0/30</span>
+          <span class="pill gold" id="b-gold">$175</span>
+          <span class="pill hp" id="b-hp">HP: 20</span>
+          <span class="pill coins" id="b-coins">+0c</span>
+        </div>
+        <div class="pill-row">
+          <button class="btn sm good" id="btn-wave">Wave 1</button>
+          <button class="btn sm" id="btn-autowave">Auto: OFF</button>
+          <button class="btn sm primary" id="btn-speed">1x</button>
+          <button class="btn sm" id="btn-pause">Pause</button>
+          <button class="btn sm gold" id="btn-tavern">Tavern</button>
+          <button class="btn sm bad" id="btn-exit-battle">Lobby</button>
+        </div>
+      </div>
+
+      <div class="boss-bar" id="boss-bar">
+        <span id="boss-name">BOSS</span>
+        <div class="boss-track"><div class="boss-fill" id="boss-fill"></div></div>
+        <span id="boss-hp-txt">0/0</span>
+      </div>
+
+      <div class="battle-stage">
+        <canvas id="battle-canvas"></canvas>
+      </div>
+
+      <div class="inspector-bar" id="inspector-bar">
+        <div>
+          <strong id="insp-title">Tower</strong>
+          <span class="subtext" id="insp-stats"></span>
+        </div>
+        <div class="pill-row">
+          <button class="btn sm good" id="btn-insp-upgr">Upgrade</button>
+          <button class="btn sm" id="btn-insp-tgt">Target: first</button>
+          <button class="btn sm bad" id="btn-insp-sell">Sell</button>
+          <button class="btn sm" id="btn-insp-close">X</button>
+        </div>
+      </div>
+
+      <div class="battle-dock" id="battle-dock"></div>
+    </section>
+
+    <nav class="navbar" id="lobby-navbar">
+      <button class="btn active" data-tab="lobby">Battle</button>
+      <button class="btn" data-tab="gacha">Gacha</button>
+      <button class="btn" data-tab="inventory">Loadout</button>
+      <button class="btn" data-tab="bestiary">Bestiary</button>
+    </nav>
+  </div>
+
+  <!-- TAVERN / END MODAL -->
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal-card" id="modal-body"></div>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="audio.js"></script>
+  <script src="engine.js"></script>
+  <script src="renderer.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
