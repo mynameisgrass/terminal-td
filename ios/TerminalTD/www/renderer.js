@@ -10,6 +10,21 @@
     transcendent: "#2dd4bf",
   };
 
+  function roundRectPath(ctx, x, y, w, h, r) {
+    const rad = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rad, y);
+    ctx.lineTo(x + w - rad, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
+    ctx.lineTo(x + w, y + h - rad);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+    ctx.lineTo(x + rad, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
+    ctx.lineTo(x, y + rad);
+    ctx.quadraticCurveTo(x, y, x + rad, y);
+    ctx.closePath();
+  }
+
   function drawBattle(canvas, battle, hoverCell) {
     if (!canvas || !battle) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -152,8 +167,7 @@
       ctx.fillStyle = "#1e293b";
       ctx.strokeStyle = rCol;
       ctx.lineWidth = Math.max(1.5, tile * 0.08);
-      ctx.beginPath();
-      ctx.roundRect(ox + t.x * tile + 2, oy + t.y * tile + 2, tile - 4, tile - 4, 4);
+      roundRectPath(ctx, ox + t.x * tile + 2, oy + t.y * tile + 2, tile - 4, tile - 4, 4);
       ctx.fill();
       ctx.stroke();
 

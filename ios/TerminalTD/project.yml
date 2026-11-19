@@ -2,7 +2,7 @@ name: TerminalTD
 options:
   bundleIdPrefix: com.mynameisgrass
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "14.0"
 targets:
   TerminalTD:
     type: application
@@ -13,6 +13,7 @@ targets:
         type: folder
     settings:
       base:
+        ARCHS: arm64
         PRODUCT_BUNDLE_IDENTIFIER: com.mynameisgrass.terminaltd
         PRODUCT_NAME: TerminalTD
         INFOPLIST_FILE: App/Info.plist
