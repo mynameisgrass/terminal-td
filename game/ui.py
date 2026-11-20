@@ -204,6 +204,8 @@ class UIState:
         self.bestiary_scroll: int = 0
         self.cam_x: int = 0
         self.cam_y: int = 0
+        self.mass_anchor: Optional[Tuple[int, int]] = None
+        self.paint_mode: bool = False
 
 
 # ================= FULL-SCREEN SETUP / LOBBY =================
@@ -620,15 +622,41 @@ def render_game(stdscr: curses.window, state: GameState, ui: UIState, has_colors
         st_lbl = "VICTORY"
 
     auto_lbl = "AUTO:ON" if state.auto_start else "AUTO:OFF"
+    paint_lbl = " | PAINT:ON" if ui.paint_mode else ""
     header = (
         f" TD | {state.map_def.name} [{state.difficulty.name}] | W:{wave_lbl} ({st_lbl})"
-        f" | ${state.gold} | HP:{state.lives} | +{state.coins_earned}c | Scr:{state.score} | {state.speed_mult}x | {auto_lbl}"
+        f" | ${state.gold} | HP:{state.lives} | +{state.coins_earned}c | Scr:{state.score} | {state.speed_mult}x | {auto_lbl}{paint_lbl}"
     )
     safe_addstr(stdscr, 0, 0, header.ljust(max_x)[:max_x], cp(CP_HUD, curses.A_BOLD))
 
-    # --- 2. Full-width Boss HP Bar / Threat Bar ---
+    # --- 2. Full-width Boss HP Bar / Threat Bar / Mass-Place Bar ---
+    mass_candidates: List[Tuple[int, int]] = []
+    mass_index_map: Dict[Tuple[int, int], int] = {}
+    mass_rect: Optional[Tuple[int, int, int, int]] = None
+    if ui.mass_anchor is not None:
+        ax, ay = ui.mass_anchor
+        mass_rect = (
+            min(ax, state.cursor_x),
+            min(ay, state.cursor_y),
+            max(ax, state.cursor_x),
+            max(ay, state.cursor_y),
+        )
+        mass_candidates = state.rect_build_candidates(ax, ay, state.cursor_x, state.cursor_y)
+        mass_index_map = {pos: idx for idx, pos in enumerate(mass_candidates)}
+
     bosses = state.active_bosses()
-    if bosses:
+    if ui.mass_anchor is not None:
+        bp = TOWER_BLUEPRINTS[state.selected_tower_kind]
+        unit_cost = bp.levels[0].cost
+        afford_cnt = min(len(mass_candidates), state.gold // unit_cost if unit_cost > 0 else 0)
+        total_cost = len(mass_candidates) * unit_cost
+        mline = (
+            f" MASS-PLACE ({ui.mass_anchor[0]},{ui.mass_anchor[1]})->({state.cursor_x},{state.cursor_y})"
+            f" | {len(mass_candidates)} plots (${total_cost}, afford {afford_cnt}x {bp.name})"
+            f" | [Space] Build  [U] Upgr Box  [Z/Esc] Cancel"
+        )
+        safe_addstr(stdscr, 1, 0, mline.ljust(max_x)[:max_x], cp(CP_GOOD, curses.A_BOLD))
+    elif bosses:
         b = max(bosses, key=lambda e: e.progress)
         bar_w = min(30, max(14, max_x // 4))
         bar = render_hp_bar(b.hp, b.max_hp, bar_w)
@@ -752,9 +780,19 @@ def render_game(stdscr: curses.window, state: GameState, ui: UIState, has_colors
                 schar, skind = shot_cells[pos]
                 row0 = f" {schar} "[:tw] if tw >= 3 else f"{schar} "
                 attr = cp(rarity_cp(TOWER_BLUEPRINTS[skind].rarity), curses.A_BOLD)
+            elif pos in mass_index_map:
+                bp = TOWER_BLUEPRINTS[state.selected_tower_kind]
+                m_idx = mass_index_map[pos]
+                can_pay = (m_idx + 1) * bp.levels[0].cost <= state.gold
+                row0 = f"{bp.symbol}?"[:tw].ljust(tw)
+                row1 = ("$$" if can_pay else "--").ljust(tw)[:tw] if th >= 2 else row1
+                attr = cp(CP_GOOD if can_pay else CP_WARN, curses.A_BOLD)
             elif in_range and pos not in state.road_set:
                 row0 = ("+" + " " * (tw - 1))[:tw]
                 attr = cp(CP_RANGE, curses.A_BOLD)
+
+            if mass_rect is not None and mass_rect[0] <= x <= mass_rect[2] and mass_rect[1] <= y <= mass_rect[3] and pos in state.towers:
+                attr |= curses.A_UNDERLINE
 
             if is_cursor:
                 attr |= curses.A_REVERSE
@@ -865,8 +903,8 @@ def render_game(stdscr: curses.window, state: GameState, ui: UIState, has_colors
 
     # --- 5. Full-width Bottom Controls & Log ---
     bot_y = map_y + map_h
-    c1 = "[Arrows/WASD] Move  [1-8] Loadout  [Space] Build/Upgr  [U] Upgr  [X] Sell  [T] Target"
-    c2 = "[N] Wave/Prestart  [V] Auto-Wave  [F] Speed(1-10x)  [G] Tavern  [B] Bestiary  [P] Pause  [R] Lobby  [Q] Quit"
+    c1 = "[Arrows/WASD] Move  [1-8] Loadout  [Space] Build/Upgr  [Z] Mass-Box  [C] Paint  [U] Upgr  [X] Sell"
+    c2 = "[N] Wave/Prestart  [V] Auto-Wave  [F] Speed(1-10x)  [T] Target  [G] Tavern  [B] Codex  [P] Pause  [R] Lobby  [Q] Quit"
     safe_addstr(stdscr, bot_y, 0, c1[:max_x], cp(CP_HUD))
     safe_addstr(stdscr, bot_y + 1, 0, c2[:max_x], cp(CP_HUD))
 
@@ -1042,7 +1080,15 @@ def handle_play_key(state: GameState, ui: UIState, key: int) -> Tuple[bool, Game
     if key in (ord("q"), ord("Q")):
         return True, state
     if key in (ord("r"), ord("R")):
+        ui.mass_anchor = None
+        ui.paint_mode = False
         ui.mode = "setup"
+        return False, state
+    if key == 27:  # Esc cancels mass-place / paint
+        if ui.mass_anchor is not None or ui.paint_mode:
+            ui.mass_anchor = None
+            ui.paint_mode = False
+            state.log("Cancelled Mass-Place / Paint.")
         return False, state
     if key in (ord("g"), ord("G")):
         ui.mode = "tavern"
@@ -1056,29 +1102,68 @@ def handle_play_key(state: GameState, ui: UIState, key: int) -> Tuple[bool, Game
         state.enter_endless()
         return False, state
 
+    moved = False
     if key in (curses.KEY_LEFT, ord("a"), ord("A"), ord("h"), ord("H")):
         state.move_cursor(-1, 0)
+        moved = True
     elif key in (curses.KEY_RIGHT, ord("d"), ord("D"), ord("l"), ord("L")):
         state.move_cursor(1, 0)
+        moved = True
     elif key in (curses.KEY_UP, ord("w"), ord("W"), ord("k"), ord("K")):
         state.move_cursor(0, -1)
+        moved = True
     elif key in (curses.KEY_DOWN, ord("s"), ord("S"), ord("j"), ord("J")):
         state.move_cursor(0, 1)
+        moved = True
 
-    elif ord("1") <= key <= ord("8"):
+    if moved and ui.paint_mode and not state.game_over:
+        bp = TOWER_BLUEPRINTS.get(state.selected_tower_kind)
+        if bp and state.can_build_at(state.cursor_x, state.cursor_y) and state.gold >= bp.levels[0].cost:
+            state.build_tower(state.cursor_x, state.cursor_y, state.selected_tower_kind)
+        return False, state
+
+    if ord("1") <= key <= ord("8"):
         idx = key - ord("1")
         if idx < len(state.loadout):
             state.selected_tower_kind = state.loadout[idx]
 
-    elif key in (ord(" "), ord("\n"), ord("\r"), curses.KEY_ENTER):
-        pos = (state.cursor_x, state.cursor_y)
-        if pos in state.towers:
-            state.upgrade_tower(*pos)
+    elif key in (ord("z"), ord("Z")):
+        if ui.mass_anchor is None:
+            ui.paint_mode = False
+            ui.mass_anchor = (state.cursor_x, state.cursor_y)
+            state.log(f"Mass-Place anchor at ({state.cursor_x},{state.cursor_y}). Move cursor & press [Space] to build or [U] to upgrade.")
         else:
-            state.build_tower(state.cursor_x, state.cursor_y, state.selected_tower_kind)
+            ui.mass_anchor = None
+            state.log("Mass-Place cancelled.")
+
+    elif key in (ord("c"), ord("C")):
+        ui.mass_anchor = None
+        ui.paint_mode = not ui.paint_mode
+        state.log(f"Paint Brush: {'ON (move cursor to auto-build)' if ui.paint_mode else 'OFF'}")
+        if ui.paint_mode:
+            bp = TOWER_BLUEPRINTS.get(state.selected_tower_kind)
+            if bp and state.can_build_at(state.cursor_x, state.cursor_y) and state.gold >= bp.levels[0].cost:
+                state.build_tower(state.cursor_x, state.cursor_y, state.selected_tower_kind)
+
+    elif key in (ord(" "), ord("\n"), ord("\r"), curses.KEY_ENTER):
+        if ui.mass_anchor is not None:
+            ax, ay = ui.mass_anchor
+            state.mass_build_rect(ax, ay, state.cursor_x, state.cursor_y, state.selected_tower_kind)
+            ui.mass_anchor = None
+        else:
+            pos = (state.cursor_x, state.cursor_y)
+            if pos in state.towers:
+                state.upgrade_tower(*pos)
+            else:
+                state.build_tower(state.cursor_x, state.cursor_y, state.selected_tower_kind)
 
     elif key in (ord("u"), ord("U")):
-        state.upgrade_tower(state.cursor_x, state.cursor_y)
+        if ui.mass_anchor is not None:
+            ax, ay = ui.mass_anchor
+            state.mass_upgrade_rect(ax, ay, state.cursor_x, state.cursor_y)
+            ui.mass_anchor = None
+        else:
+            state.upgrade_tower(state.cursor_x, state.cursor_y)
 
     elif key in (ord("x"), ord("X"), curses.KEY_BACKSPACE, 127, 8, curses.KEY_DC):
         state.sell_tower(state.cursor_x, state.cursor_y)

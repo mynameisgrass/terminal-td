@@ -234,6 +234,23 @@ class TestSpeedAutoStartPrestartAndUnits(unittest.TestCase):
         self.assertLess(enemy.hp, enemy.max_hp - 150)
         self.assertLess(enemy.armor_current, 12.0)
 
+    def test_mass_build_and_mass_upgrade_rect(self) -> None:
+        state = GameState(map_index=0, difficulty_key="easy", loadout=["scout"])
+        state.gold = 225  # 4 scouts ($200) + $25 left
+        # (1,2)..(3,3) has 6 buildable plots on Grand Serpentine; budget allows 4
+        built = state.mass_build_rect(1, 2, 3, 3, "scout")
+        self.assertEqual(built, 4)
+        self.assertEqual(state.gold, 25)
+        self.assertEqual(len(state.towers), 4)
+
+        # Give gold for 2 upgrades ($55 each = $110)
+        state.gold = 120
+        upgraded = state.mass_upgrade_rect(1, 2, 3, 3)
+        self.assertEqual(upgraded, 2)
+        self.assertEqual(state.gold, 10)
+        levels = sorted(t.level for t in state.towers.values())
+        self.assertEqual(levels, [1, 1, 2, 2])
+
 
 class TestFullScreenPTY(unittest.TestCase):
     def _run_pty(self, rows: int, cols: int, keys: bytes) -> str:
@@ -288,10 +305,12 @@ class TestFullScreenPTY(unittest.TestCase):
             return buf.decode("utf-8", errors="ignore")
 
     def test_fullscreen_160x45_banners_autosell_speed10x_autostart_prestart(self) -> None:
-        # Gacha (g) -> switch banner (\t) -> toggle auto-sell (a) -> 1x summon (1) -> back (g) -> start (\n) -> speed 10x (ffff) -> auto-start (v) -> wait/prestart (n) -> quit (q)
-        out = self._run_pty(45, 160, b"g|\t|a|1|g|\n|ffff|v|n|q")
+        # Gacha (g) -> switch banner (\t) -> toggle auto-sell (a) -> 1x summon (1) -> back (g) -> start (\n) -> mass-place box (z|dd| ) -> paint brush (c|s|c) -> speed 10x (ffff) -> auto-start (v) -> wait/prestart (n) -> quit (q)
+        out = self._run_pty(45, 160, b"g|\t|a|1|g|\n|z|dd| |c|s|c|ffff|v|n|q")
         self.assertIn("Warfare & Boss-Killer", out)
         self.assertIn("Auto-Sell: Dupes: Common", out)
+        self.assertIn("MASS-PLACE", out)
+        self.assertIn("PAINT:ON", out)
         self.assertIn("10x", out)
         self.assertIn("AUTO:ON", out)
 

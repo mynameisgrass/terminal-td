@@ -267,6 +267,85 @@ class GameState:
         self.log(f"Sold {tower.blueprint.name} Lv{tower.level} for +${refund}.")
         return True
 
+    def rect_build_candidates(self, x1: int, y1: int, x2: int, y2: int) -> List[Tuple[int, int]]:
+        lx, rx = max(0, min(x1, x2)), min(self.width - 1, max(x1, x2))
+        ty, by = max(0, min(y1, y2)), min(self.height - 1, max(y1, y2))
+        return [
+            (x, y)
+            for y in range(ty, by + 1)
+            for x in range(lx, rx + 1)
+            if self.can_build_at(x, y)
+        ]
+
+    def mass_build_rect(self, x1: int, y1: int, x2: int, y2: int, kind: str) -> int:
+        if self.game_over or kind not in TOWER_BLUEPRINTS:
+            return 0
+        if kind not in self.loadout:
+            self.log(f"{TOWER_BLUEPRINTS[kind].name} is not in your 8-unit Loadout!")
+            return 0
+        candidates = self.rect_build_candidates(x1, y1, x2, y2)
+        if not candidates:
+            self.log("No buildable plots in selection.")
+            return 0
+        bp = TOWER_BLUEPRINTS[kind]
+        cost = bp.levels[0].cost
+        if self.gold < cost:
+            self.log(f"Need ${cost} for {bp.name} (have ${self.gold}).")
+            return 0
+        built = 0
+        for x, y in candidates:
+            if self.gold < cost:
+                break
+            self.gold -= cost
+            self.towers[(x, y)] = Tower(
+                x=x,
+                y=y,
+                kind=kind,
+                blueprints=TOWER_BLUEPRINTS,
+                level=1,
+                total_invested=cost,
+                income_timer=bp.levels[0].income_interval,
+                spawn_timer=0.5 if bp.levels[0].spawn_ally_kind else 0.0,
+            )
+            built += 1
+        if built > 0:
+            self.recompute_buffs()
+            self.log(f"Mass-built {built}x {bp.name} for ${built * cost}!")
+        return built
+
+    def mass_upgrade_rect(self, x1: int, y1: int, x2: int, y2: int) -> int:
+        if self.game_over:
+            return 0
+        lx, rx = max(0, min(x1, x2)), min(self.width - 1, max(x1, x2))
+        ty, by = max(0, min(y1, y2)), min(self.height - 1, max(y1, y2))
+        towers_in_box = [
+            t
+            for (tx, ty_), t in self.towers.items()
+            if lx <= tx <= rx and ty <= ty_ <= by and t.can_upgrade
+        ]
+        if not towers_in_box:
+            self.log("No upgradable towers in selection.")
+            return 0
+        # Upgrade lowest level first so defenses level up evenly
+        towers_in_box.sort(key=lambda t: (t.level, t.y, t.x))
+        upgraded = 0
+        spent = 0
+        for t in towers_in_box:
+            cost = t.upgrade_cost
+            if cost is None or self.gold < cost:
+                continue
+            self.gold -= cost
+            t.level += 1
+            t.total_invested += cost
+            upgraded += 1
+            spent += cost
+        if upgraded > 0:
+            self.recompute_buffs()
+            self.log(f"Mass-upgraded {upgraded}x towers for ${spent}!")
+        else:
+            self.log("Not enough Gold to upgrade towers in selection.")
+        return upgraded
+
     def cycle_tower_targeting(self, x: int, y: int) -> bool:
         tower = self.towers.get((x, y))
         if tower is None:
