@@ -1,4 +1,4 @@
-"""Enemy unit catalog (52 enemies including 10 Bosses) + 11 Friendly summoned road units."""
+"""Enemy unit catalog (52 enemies including 10 Bosses) + 13 Friendly summoned road units."""
 
 from __future__ import annotations
 
@@ -34,6 +34,12 @@ _ALLY_LIST: Tuple[AllyTemplate, ...] = (
     AllyTemplate("immortal_phoenix", "*", "Immortal Phoenix", max_hp=650, speed=2.3, atk_dps=120, armor=12.0,
                  revives=3, revive_hp_ratio=0.80, revive_blast_dmg=220.0, splash_radius=2.8,
                  description="TRANSCENDENT: 3 Second Lives + huge inferno blasts!"),
+    AllyTemplate("solar_champion", "S", "Solar Champion", max_hp=880, speed=2.1, atk_dps=135, armor=14.0,
+                 revives=2, revive_hp_ratio=0.75, revive_blast_dmg=240.0, splash_radius=2.5,
+                 description="MYTHIC: 2 Second Lives + radiant shockwaves!"),
+    AllyTemplate("monarch_knight", "M", "Monarch Guard", max_hp=1250, speed=2.3, atk_dps=185, armor=22.0,
+                 revives=4, revive_hp_ratio=0.80, revive_blast_dmg=320.0, splash_radius=3.0,
+                 description="MONARCH: 4 Second Lives + supreme void shockwaves!"),
 )
 
 ALLY_TEMPLATES: Dict[str, AllyTemplate] = {a.kind: a for a in _ALLY_LIST}

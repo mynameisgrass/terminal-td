@@ -36,10 +36,11 @@ class TestCatalogs(unittest.TestCase):
         self.assertEqual(len(UNIT_ORDER), len(UNIT_TEMPLATES))
         bosses = [u for u in UNIT_TEMPLATES.values() if u.is_boss]
         self.assertEqual(len(bosses), 10)
-        self.assertEqual(len(TOWER_ORDER), 48)
-        self.assertEqual(len(ALLY_TEMPLATES), 11)
+        self.assertEqual(len(TOWER_ORDER), 62)
+        self.assertEqual(len(ALLY_TEMPLATES), 13)
         self.assertEqual(len(WAVE_DEFINITIONS), 30)
-        self.assertEqual(len(BANNER_ORDER), 4)
+        self.assertEqual(len(BANNER_ORDER), 5)
+        self.assertIn("monarch_core", TOWER_BLUEPRINTS)
         for k in TOWER_ORDER:
             self.assertEqual(len(TOWER_BLUEPRINTS[k].levels), 5)
 
@@ -87,7 +88,7 @@ class TestBannersAutoSellAndLoadout(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             save_path = os.path.join(tmp, "save.json")
             prof = PlayerProfile.new_default(save_path=save_path)
-            self.assertEqual(prof.coins, 1000)
+            self.assertEqual(prof.coins, 500)
             self.assertEqual(len(prof.loadout), len(STARTER_LOADOUT))
 
             # Enable auto-sell for all Commons & Rares
@@ -250,6 +251,73 @@ class TestSpeedAutoStartPrestartAndUnits(unittest.TestCase):
         self.assertEqual(state.gold, 10)
         levels = sorted(t.level for t in state.towers.values())
         self.assertEqual(levels, [1, 1, 2, 2])
+
+    def test_dupes_all_autosell_fusion_star_upgrade_and_sacrifice_perks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            save_path = os.path.join(tmp, "save.json")
+            prof = PlayerProfile.new_default(save_path=save_path)
+            # 1. Test Auto-Sell EVERY Dupe ("dupes_all") across high rarities
+            prof.auto_sell_mode = "dupes_all"
+            prof.inventory["sun_temple"] = 1
+            self.assertTrue(prof.should_auto_sell("sun_temple", owned_before=1))
+            self.assertFalse(prof.should_auto_sell("void_monarch", owned_before=0))
+            prof.coins = 10000
+            res = summon_ten(prof, banner_key="monarch_vault", rng=random.Random(7))
+            self.assertTrue(res.ok)
+            # Every pulled duplicate (owned before pull) auto-sold regardless of rarity!
+            for pull in res.pulls:
+                if not pull.is_new:
+                    self.assertGreater(pull.auto_sold_coins, 0)
+
+            # 2. Test Recipe Fusion -> Monarch Core
+            prof.inventory["void_monarch"] = 1
+            prof.inventory["quantum_bank"] = 1
+            prof.coins = 5000
+            ok_fuse, msg_fuse = prof.craft_fusion("fuse_monarch_core")
+            self.assertTrue(ok_fuse, msg_fuse)
+            self.assertGreaterEqual(prof.inventory.get("monarch_core", 0), 1)
+            self.assertEqual(prof.inventory.get("void_monarch", 0), 0)
+
+            # 3. Test Star Upgrade (both pure Coins and Dupe -50%)
+            prof.inventory["scout"] = 2
+            ok_s1, msg_s1 = prof.upgrade_unit_star("scout", use_dupe=True)
+            self.assertTrue(ok_s1, msg_s1)
+            self.assertEqual(prof.star_of("scout"), 2)
+            self.assertEqual(prof.inventory["scout"], 1)
+
+            # 4. Test Sacrifice Altar: Monarch Core -> +1 Loadout Slot for 3 runs, Sun Temple -> +$225 Gold for 3 runs
+            prof.inventory["monarch_core"] = 2
+            ok_sac1, msg_sac1 = prof.sacrifice_for_perk("monarch_slot", "monarch_core")
+            self.assertTrue(ok_sac1, msg_sac1)
+            self.assertEqual(prof.effective_max_loadout(), 9)
+            self.assertEqual(prof.inventory["monarch_core"], 1)
+
+            prof.inventory["sun_temple"] = 2
+            ok_sac2, msg_sac2 = prof.sacrifice_for_perk("war_chest", "sun_temple")
+            self.assertTrue(ok_sac2, msg_sac2)
+
+            # Run 1 consumes 1 charge & applies +1 slot & +$225 gold
+            for idx in range(1, 10):
+                k = TOWER_ORDER[idx]
+                prof.inventory[k] = prof.inventory.get(k, 0) + 1
+                if len(prof.loadout) < prof.effective_max_loadout() and k not in prof.loadout:
+                    prof.loadout.append(k)
+            self.assertEqual(len(prof.loadout), 9)
+
+            snap1 = prof.consume_perks_for_run()
+            self.assertEqual(snap1["slot_bonus"], 1)
+            self.assertEqual(snap1["start_gold"], 225)
+            st_battle = GameState(map_index=0, difficulty_key="normal", profile=prof, run_perks=snap1)
+            self.assertEqual(st_battle.gold, 175 + 225)
+            self.assertEqual(len(st_battle.loadout), 9)
+            self.assertTrue(st_battle.build_tower(2, 2, "scout"))
+            self.assertGreater(st_battle.towers[(2, 2)].effective_damage, TOWER_BLUEPRINTS["scout"].levels[0].damage)
+
+            # Runs 2 & 3 finish remaining duration; after Run 3 perks expire back to 8 slots
+            prof.consume_perks_for_run()
+            prof.consume_perks_for_run()
+            self.assertEqual(prof.effective_max_loadout(), 8)
+            self.assertEqual(len(prof.loadout), 8)
 
 
 class TestFullScreenPTY(unittest.TestCase):

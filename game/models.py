@@ -11,6 +11,8 @@ GRID_HEIGHT = 18
 META_WIDTH = 18
 META_HEIGHT = 9
 MAX_LOADOUT = 8
+MAX_PERK_LOADOUT = 10
+MAX_UNIT_STAR = 5
 
 TARGET_FIRST = "first"
 TARGET_STRONGEST = "strongest"
@@ -24,6 +26,7 @@ AUTO_SELL_MODES: Tuple[str, ...] = (
     "dupes_c",
     "dupes_cr",
     "dupes_cre",
+    "dupes_all",
     "all_c",
     "all_cr",
 )
@@ -354,6 +357,7 @@ class Tower:
     kind: str
     blueprints: Dict[str, TowerBlueprint]
     level: int = 1
+    star_level: int = 1
     cooldown_left: float = 0.0
     income_timer: float = 0.0
     spawn_timer: float = 0.0
@@ -364,6 +368,8 @@ class Tower:
     buff_dmg_mult: float = 1.0
     buff_spd_mult: float = 1.0
     buff_rng_mult: float = 1.0
+    perk_dmg_mult: float = 1.0
+    perk_spd_mult: float = 1.0
 
     @property
     def blueprint(self) -> TowerBlueprint:
@@ -374,12 +380,24 @@ class Tower:
         return self.blueprint.levels[self.level - 1]
 
     @property
+    def star_dmg_mult(self) -> float:
+        return 1.0 + 0.12 * max(0, self.star_level - 1)
+
+    @property
+    def star_spd_mult(self) -> float:
+        return 1.0 + 0.06 * max(0, self.star_level - 1)
+
+    @property
+    def star_inc_mult(self) -> float:
+        return 1.0 + 0.05 * max(0, self.star_level - 1)
+
+    @property
     def effective_damage(self) -> float:
-        return self.stats.damage * self.buff_dmg_mult
+        return self.stats.damage * self.buff_dmg_mult * self.star_dmg_mult * self.perk_dmg_mult
 
     @property
     def effective_cooldown(self) -> float:
-        return self.stats.cooldown / max(0.5, self.buff_spd_mult)
+        return self.stats.cooldown / max(0.5, self.buff_spd_mult * self.star_spd_mult * self.perk_spd_mult)
 
     @property
     def effective_range(self) -> float:

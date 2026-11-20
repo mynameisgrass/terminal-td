@@ -43,6 +43,7 @@
     if (tab === "lobby") renderLobby();
     if (tab === "gacha") renderGacha();
     if (tab === "inventory") renderInventory();
+    if (tab === "forge") renderForge();
     if (tab === "bestiary") renderBestiary();
     if (tab === "battle") renderBattleHUD();
   }
@@ -89,17 +90,31 @@
       ml.appendChild(div);
     });
 
+    const maxSlots = E.effectiveMaxLoadout(profile);
+    $("lobby-loadout-title").textContent = `3. Your ${maxSlots}-Slot Battle Loadout`;
+    const perksBar = $("lobby-perks-bar");
+    perksBar.innerHTML = "";
+    if (profile.active_perks && profile.active_perks.length > 0) {
+      for (const p of profile.active_perks) {
+        const pill = document.createElement("span");
+        pill.className = "pill coins";
+        pill.textContent = `${p.name} · ${p.runs_left}r`;
+        perksBar.appendChild(pill);
+      }
+    }
+
     const ll = $("lobby-loadout");
     ll.innerHTML = "";
-    for (let i = 0; i < D.MAX_LOADOUT; i++) {
+    for (let i = 0; i < maxSlots; i++) {
       const card = document.createElement("div");
       if (i < profile.loadout.length) {
         const k = profile.loadout[i];
         const bp = D.TOWERS[k];
+        const st = E.starOf(profile, k);
         card.className = `unit-card rar-${bp.rarity}`;
         card.innerHTML = `
           <div style="display:flex;justify-content:space-between;">
-            <strong>[${bp.symbol}] ${bp.name}</strong>
+            <strong>[${bp.symbol}] ${bp.name} ★${st}</strong>
             <span>$${bp.levels[0].cost}</span>
           </div>
           <div class="subtext">${D.RARITIES[bp.rarity].label} · ${bp.role}</div>
@@ -169,7 +184,8 @@
 
   // ========== INVENTORY & LOADOUT ==========
   function renderInventory() {
-    $("inv-header").textContent = `Inventory & Loadout (${profile.loadout.length}/${D.MAX_LOADOUT})`;
+    const maxSlots = E.effectiveMaxLoadout(profile);
+    $("inv-header").textContent = `Inventory & Loadout (${profile.loadout.length}/${maxSlots})`;
     const ordered = [...D.TOWER_ORDER].sort((a, b) => {
       const oa = (profile.inventory[a] || 0) > 0 ? 0 : 1;
       const ob = (profile.inventory[b] || 0) > 0 ? 0 : 1;
@@ -182,17 +198,19 @@
     for (const k of ordered) {
       const bp = D.TOWERS[k];
       const cnt = profile.inventory[k] || 0;
+      const star = E.starOf(profile, k);
       const eq = profile.loadout.includes(k);
       const sellCoins = D.RARITIES[bp.rarity].sell_coins;
       const card = document.createElement("div");
       card.className = `unit-card rar-${bp.rarity}`;
       card.style.opacity = cnt > 0 ? "1" : "0.45";
+      const bonusTxt = star > 1 ? ` · +${(star - 1) * 12}%DMG/+${(star - 1) * 6}%SPD` : "";
       card.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-          <strong>[${bp.symbol}] ${bp.name} ${cnt > 0 ? `(x${cnt})` : "(Locked)"}</strong>
+          <strong>[${bp.symbol}] ${bp.name} ${cnt > 0 ? `★${star} (x${cnt})` : "(Locked)"}</strong>
           <span class="subtext">${D.RARITIES[bp.rarity].label} · $${bp.levels[0].cost}</span>
         </div>
-        <div class="subtext">${bp.role} — ${bp.description}</div>
+        <div class="subtext">${bp.role}${bonusTxt} — ${bp.description}</div>
         <div class="subtext">Lv1 DMG:${bp.levels[0].damage} CD:${bp.levels[0].cooldown}s RNG:${bp.levels[0].range}</div>
       `;
       if (cnt > 0) {
@@ -207,20 +225,134 @@
           $("inv-msg").textContent = r.msg;
           renderInventory();
         };
+        actions.appendChild(eqBtn);
+
+        if (star < (D.MAX_UNIT_STAR || 5)) {
+          const hasDupe = cnt >= 2;
+          const upCost = E.starUpgradeCoinCost(bp.rarity, star + 1, hasDupe);
+          const starBtn = document.createElement("button");
+          starBtn.className = "btn sm primary";
+          starBtn.textContent = `★${star + 1} (${upCost}c${hasDupe ? " -50%" : ""})`;
+          starBtn.onclick = () => {
+            const r = E.upgradeUnitStar(profile, k, true);
+            $("inv-msg").textContent = r.msg;
+            refreshTopbar();
+            renderInventory();
+          };
+          actions.appendChild(starBtn);
+        }
+
         const sellBtn = document.createElement("button");
         sellBtn.className = "btn sm gold";
-        sellBtn.textContent = `Sell 1 (+${sellCoins}c)`;
+        sellBtn.textContent = `Sell (+${sellCoins}c)`;
         sellBtn.onclick = () => {
           const r = E.sellUnit(profile, k, 1);
           $("inv-msg").textContent = r.msg;
           refreshTopbar();
           renderInventory();
         };
-        actions.appendChild(eqBtn);
         actions.appendChild(sellBtn);
         card.appendChild(actions);
       }
       grid.appendChild(card);
+    }
+  }
+
+  // ========== FORGE: FUSION & SACRIFICE ALTAR ==========
+  function renderForge() {
+    const fg = $("fusion-grid");
+    fg.innerHTML = "";
+    for (const rec of D.FUSION_RECIPES || []) {
+      const bpo = D.TOWERS[rec.output_key];
+      const bpa = D.TOWERS[rec.ing_a];
+      const bpb = D.TOWERS[rec.ing_b];
+      const ca = profile.inventory[rec.ing_a] || 0;
+      const cb = profile.inventory[rec.ing_b] || 0;
+      const ready = (rec.ing_a === rec.ing_b ? ca >= 2 : ca >= 1 && cb >= 1) && profile.coins >= rec.coin_cost;
+      const card = document.createElement("div");
+      card.className = `unit-card rar-${bpo.rarity}`;
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <strong>[${bpo.symbol}] ${bpo.name} (Own:${profile.inventory[rec.output_key] || 0})</strong>
+          <span class="subtext">${D.RARITIES[bpo.rarity].label}</span>
+        </div>
+        <div class="subtext">${bpa.name} (x${ca}) + ${bpb.name} (x${cb}) + ${rec.coin_cost}c</div>
+        <div class="subtext">${bpo.description}</div>
+      `;
+      const btn = document.createElement("button");
+      btn.className = `btn sm ${ready ? "good" : ""}`;
+      btn.style.marginTop = "4px";
+      btn.textContent = ready ? `FUSE (${rec.coin_cost}c)` : `Need Ingredients / ${rec.coin_cost}c`;
+      btn.onclick = () => {
+        const r = E.craftFusion(profile, rec.key);
+        $("forge-msg").textContent = r.msg;
+        refreshTopbar();
+        renderForge();
+      };
+      card.appendChild(btn);
+      fg.appendChild(card);
+    }
+
+    const activeBar = $("altar-active-perks");
+    activeBar.innerHTML = "";
+    if (profile.active_perks && profile.active_perks.length > 0) {
+      for (const p of profile.active_perks) {
+        const span = document.createElement("span");
+        span.className = "pill coins";
+        span.textContent = `ACTIVE: ${p.name} (${p.runs_left} runs left)`;
+        activeBar.appendChild(span);
+      }
+    } else {
+      const span = document.createElement("span");
+      span.className = "subtext";
+      span.textContent = "No active Altar Perks yet. Sacrifice a qualifying unit below!";
+      activeBar.appendChild(span);
+    }
+
+    const ag = $("altar-grid");
+    ag.innerHTML = "";
+    for (const perk of D.SACRIFICE_PERKS || []) {
+      const qual = D.TOWER_ORDER.filter((k) => {
+        if ((profile.inventory[k] || 0) <= 0) return false;
+        return E.unitQualifiesForPerk(perk, D.TOWERS[k], E.starOf(profile, k)).ok;
+      });
+      const card = document.createElement("div");
+      card.className = "unit-card rar-legendary";
+      card.innerHTML = `
+        <strong>${perk.name}</strong>
+        <div class="subtext">${perk.description}</div>
+      `;
+      const row = document.createElement("div");
+      row.className = "pill-row";
+      row.style.marginTop = "6px";
+      if (qual.length > 0) {
+        const sel = document.createElement("select");
+        sel.className = "btn sm";
+        for (const k of qual) {
+          const opt = document.createElement("option");
+          opt.value = k;
+          opt.textContent = `${D.TOWERS[k].name} ★${E.starOf(profile, k)} (x${profile.inventory[k]})`;
+          sel.appendChild(opt);
+        }
+        const sBtn = document.createElement("button");
+        sBtn.className = "btn sm bad";
+        sBtn.textContent = "SACRIFICE 1";
+        sBtn.onclick = () => {
+          const r = E.sacrificeForPerk(profile, perk.key, sel.value);
+          $("forge-msg").textContent = r.msg;
+          refreshTopbar();
+          renderForge();
+        };
+        row.appendChild(sel);
+        row.appendChild(sBtn);
+      } else {
+        const msg = document.createElement("span");
+        msg.className = "subtext";
+        msg.textContent = "No qualifying units owned.";
+        row.appendChild(msg);
+      }
+      card.appendChild(row);
+      ag.appendChild(card);
     }
   }
 
@@ -263,7 +395,7 @@
     dockButtons = [];
     for (const k of battle.loadout) {
       const bp = D.TOWERS[k];
-      const cost = bp.levels[0].cost;
+      const cost = battle.towerCost(bp.levels[0].cost);
       const btn = document.createElement("button");
       btn.className = `dock-unit rar-${bp.rarity}`;
       btn.innerHTML = `
@@ -335,11 +467,12 @@
     if (pendingBuild && battle.canBuildAt(pendingBuild.x, pendingBuild.y) && battle.selectedTowerKind) {
       const bp = D.TOWERS[battle.selectedTowerKind];
       const st = bp.levels[0];
-      const afford = battle.gold >= st.cost;
+      const cCost = battle.towerCost(st.cost);
+      const afford = battle.gold >= cCost;
       $("confirm-build-bar").classList.add("show");
       $("conf-title").textContent = `[${bp.symbol}] ${bp.name} @ (${pendingBuild.x},${pendingBuild.y})`;
-      $("conf-stats").textContent = `$${st.cost} | DMG:${st.damage} RNG:${st.range} CD:${st.cooldown}s (Tap tile again or [BUILD])`;
-      $("btn-conf-build").textContent = afford ? `[BUILD $${st.cost}]` : `[NEED $${st.cost}]`;
+      $("conf-stats").textContent = `$${cCost} | DMG:${st.damage} RNG:${st.range} CD:${st.cooldown}s (Tap tile again or [BUILD])`;
+      $("btn-conf-build").textContent = afford ? `[BUILD $${cCost}]` : `[NEED $${cCost}]`;
       $("btn-conf-build").className = `btn sm ${afford ? "good" : "bad"}`;
     } else {
       pendingBuild = null;
@@ -353,17 +486,17 @@
       const bp = D.TOWERS[tower.kind];
       const st = battle.towerStats(tower);
       $("inspector-bar").classList.add("show");
-      $("insp-title").textContent = `${bp.name} Lv${tower.level}`;
+      $("insp-title").textContent = `${bp.name} Lv${tower.level} ★${tower.starLevel || 1}`;
       if (st.income_per_wave > 0) {
         $("insp-stats").textContent = `+$${st.income_per_wave}/w +$${st.income_per_tick}/t (Earned $${tower.goldEarned})`;
       } else {
-        const effD = Math.round(st.damage * tower.buffDmg);
+        const effD = Math.round(st.damage * tower.buffDmg * (tower.starDmgMult || 1) * battle.perkDmgMult);
         const effR = (st.range * tower.buffRng).toFixed(1);
-        const effCd = (st.cooldown / Math.max(0.5, tower.buffSpd)).toFixed(2);
+        const effCd = (st.cooldown / Math.max(0.5, tower.buffSpd * (tower.starSpdMult || 1) * battle.perkSpdMult)).toFixed(2);
         $("insp-stats").textContent = `DMG:${effD} RNG:${effR} CD:${effCd}s Kills:${tower.kills}`;
       }
       if (tower.level < bp.levels.length) {
-        const uc = bp.levels[tower.level].cost;
+        const uc = battle.towerCost(bp.levels[tower.level].cost);
         $("btn-insp-upgr").style.display = "inline-block";
         $("btn-insp-upgr").textContent = `Upgr Lv${tower.level + 1} ($${uc})`;
       } else {
@@ -510,7 +643,8 @@
   };
 
   $("btn-start-battle").onclick = () => {
-    battle = new E.GameBattle(selectedMapIdx, selectedDiff, profile);
+    const runPerks = E.consumePerksForRun(profile);
+    battle = new E.GameBattle(selectedMapIdx, selectedDiff, profile, runPerks);
     pendingBuild = null;
     modalMode = null;
     $("modal-backdrop").classList.remove("show");

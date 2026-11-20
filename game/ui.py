@@ -10,6 +10,12 @@ from typing import Dict, List, Optional, Tuple
 from game.data.banners import BANNERS, BANNER_ORDER
 from game.data.difficulties import DIFFICULTIES, DIFFICULTY_ORDER
 from game.data.maps import MAPS
+from game.data.progression import (
+    FUSION_RECIPES,
+    SACRIFICE_PERKS,
+    star_upgrade_coin_cost,
+    unit_qualifies_for_perk,
+)
 from game.data.rarities import RARITIES, RARITY_ORDER
 from game.data.towers import TOWER_BLUEPRINTS, TOWER_ORDER
 from game.data.units import ALLY_TEMPLATES, UNIT_ORDER, UNIT_TEMPLATES
@@ -25,7 +31,7 @@ from game.gambling import (
     summon_one,
     summon_ten,
 )
-from game.models import MAX_LOADOUT, AllyUnit, Enemy, Tower
+from game.models import MAX_LOADOUT, MAX_UNIT_STAR, AllyUnit, Enemy, Tower
 from game.profile import AUTO_SELL_LABELS, PlayerProfile
 
 
@@ -197,7 +203,7 @@ def get_range_cells(state: GameState) -> set[Tuple[int, int]]:
 
 class UIState:
     def __init__(self) -> None:
-        self.mode: str = "setup"  # setup, gacha, inventory, play, tavern, bestiary
+        self.mode: str = "setup"  # setup, gacha, inventory, forge, play, tavern, bestiary
         self.return_mode: str = "setup"
         self.setup_diff_idx: int = 1  # Normal
         self.setup_map_idx: int = 0
@@ -205,6 +211,11 @@ class UIState:
         self.inv_cursor: int = 0
         self.inv_scroll: int = 0
         self.inv_msg: str = ""
+        self.forge_tab: int = 0  # 0=Fusion, 1=Sacrifice Altar
+        self.forge_fusion_idx: int = 0
+        self.forge_perk_idx: int = 0
+        self.forge_unit_idx: int = 0
+        self.forge_msg: str = ""
         self.gacha_result: Optional[SummonBatchResult] = None
         self.bet_idx: int = 1
         self.tavern_result: Optional[GambleResult] = None
@@ -279,30 +290,43 @@ def render_setup(stdscr: curses.window, profile: PlayerProfile, ui: UIState, has
     safe_addstr(stdscr, 15, lx, "MENU SHORTCUTS:", cp(CP_HUD, curses.A_BOLD))
     safe_addstr(stdscr, 16, lx + 2, "[Enter / Space]  START BATTLE", cp(CP_GOOD, curses.A_BOLD))
     safe_addstr(stdscr, 17, lx + 2, "[G]              UNIT SUMMON GACHA (Gamble Coins for Units!)", cp(CP_GOLD, curses.A_BOLD))
-    safe_addstr(stdscr, 18, lx + 2, "[I]              INVENTORY & 8-SLOT LOADOUT (Equip / Sell)", cp(CP_HUD, curses.A_BOLD))
-    safe_addstr(stdscr, 19, lx + 2, "[B]              BESTIARY (52 Enemies, 10 Bosses, 11 Allies)", cp(CP_DEFAULT))
-    safe_addstr(stdscr, 20, lx + 2, "[Q]              Quit", cp(CP_DIM))
+    safe_addstr(stdscr, 18, lx + 2, "[I]              INVENTORY, STAR-UP & LOADOUT (Equip / Sell / ★1-5)", cp(CP_HUD, curses.A_BOLD))
+    safe_addstr(stdscr, 19, lx + 2, "[F]              FUSION & SACRIFICE ALTAR (Craft Monarchs & Perks!)", cp(CP_WARN, curses.A_BOLD))
+    safe_addstr(stdscr, 20, lx + 2, f"[B]              BESTIARY (52 Enemies, 10 Bosses, {len(ALLY_TEMPLATES)} Allies)", cp(CP_DEFAULT))
+    safe_addstr(stdscr, 21, lx + 2, "[Q]              Quit", cp(CP_DIM))
 
-    # Right: Current 8-Slot Loadout
+    if profile.active_perks and body_h >= 24:
+        p_txt = "ALTAR PERKS: " + " | ".join(
+            f"{p['name']} ({p['runs_left']}r)" for p in profile.active_perks
+        )
+        safe_addstr(stdscr, 23, lx, p_txt[:lw], cp(CP_GOLD, curses.A_BOLD))
+
+    # Right: Current Dynamic Loadout (8..10 slots with Monarch Perk)
+    eff_slots = profile.effective_max_loadout()
     rx = left_w + 1
-    draw_box(stdscr, 1, rx, body_h, right_w, f"EQUIPPED LOADOUT ({len(profile.loadout)}/{MAX_LOADOUT})", cp(CP_GOLD, curses.A_BOLD))
+    draw_box(stdscr, 1, rx, body_h, right_w, f"EQUIPPED LOADOUT ({len(profile.loadout)}/{eff_slots})", cp(CP_GOLD, curses.A_BOLD))
     ix = rx + 2
     iw = right_w - 4
-    for slot in range(MAX_LOADOUT):
-        row_y = 3 + slot * 2 if body_h >= 22 else 3 + slot
+    compact_rows = body_h < 22 or eff_slots > 8
+    for slot in range(eff_slots):
+        row_y = 3 + slot if compact_rows else 3 + slot * 2
+        if row_y >= body_h:
+            break
+        key_lbl = "0" if slot == 9 else str(slot + 1)
         if slot < len(profile.loadout):
             ukey = profile.loadout[slot]
             bp = TOWER_BLUEPRINTS[ukey]
             rinfo = RARITIES[bp.rarity]
             cnt = profile.inventory.get(ukey, 1)
-            line = f"[{slot + 1}] {bp.symbol} {bp.name:<12} [{rinfo.short}] ${bp.levels[0].cost:<3} ({bp.role})"
+            star = profile.star_of(ukey)
+            line = f"[{key_lbl}] {bp.symbol} {bp.name:<12} ★{star} [{rinfo.short}] ${bp.levels[0].cost:<3} ({bp.role})"
             safe_addstr(stdscr, row_y, ix, line[:iw], cp(rarity_cp(bp.rarity), curses.A_BOLD))
-            if body_h >= 22:
+            if not compact_rows and row_y + 1 < body_h:
                 safe_addstr(stdscr, row_y + 1, ix + 4, f"x{cnt} owned | {bp.description}"[: iw - 4], cp(CP_DIM))
         else:
-            safe_addstr(stdscr, row_y, ix, f"[{slot + 1}] <Empty Slot - Press [I] to equip>", cp(CP_DIM, curses.A_DIM))
+            safe_addstr(stdscr, row_y, ix, f"[{key_lbl}] <Empty Slot - Press [I] to equip>", cp(CP_DIM, curses.A_DIM))
 
-    footer = " Tip: Gamble Coins in [G] Gacha, sell dupes in [I] Inventory, bring up to 8 units!"
+    footer = " Tip: Gamble Coins in [G], Star-Up in [I], Fuse Monarchs & Sacrifice for Perks in [F]!"
     safe_addstr(stdscr, max_y - 1, 0, footer[: max_x - 1], cp(CP_HUD))
     stdscr.refresh()
 
@@ -405,7 +429,7 @@ def render_inventory(stdscr: curses.window, profile: PlayerProfile, ui: UIState,
     def cp(pair_id: int, extra: int = 0) -> int:
         return (curses.color_pair(pair_id) if has_colors else 0) | extra
 
-    top = f" INVENTORY & LOADOUT ({len(profile.loadout)}/{MAX_LOADOUT}) | Coins: {profile.coins} | Total Owned: {profile.owned_total()}"
+    top = f" INVENTORY & LOADOUT ({len(profile.loadout)}/{profile.effective_max_loadout()}) | Coins: {profile.coins} | Total Owned: {profile.owned_total()}"
     safe_addstr(stdscr, 0, 0, top.ljust(max_x)[:max_x], cp(CP_HUD, curses.A_BOLD))
 
     left_w = max(44, (max_x * 55) // 100)
@@ -433,9 +457,11 @@ def render_inventory(stdscr: curses.window, profile: PlayerProfile, ui: UIState,
         bp = TOWER_BLUEPRINTS[k]
         rinfo = RARITIES[bp.rarity]
         cnt = profile.inventory.get(k, 0)
+        star = profile.star_of(k)
         eq_tag = "[EQ]" if k in profile.loadout else "    "
         own_txt = f"x{cnt:<2}" if cnt > 0 else "---"
-        line = f"{'>' if idx == ui.inv_cursor else ' '} {eq_tag} {own_txt} [{rinfo.short}] {bp.symbol} {bp.name:<13} ({bp.role})"
+        st_txt = f"★{star}" if cnt > 0 else "  "
+        line = f"{'>' if idx == ui.inv_cursor else ' '} {eq_tag} {own_txt} {st_txt} [{rinfo.short}] {bp.symbol} {bp.name:<13} ({bp.role})"
         attr = cp(rarity_cp(bp.rarity) if cnt > 0 else CP_DIM, curses.A_BOLD if cnt > 0 else curses.A_DIM)
         if idx == ui.inv_cursor:
             attr |= curses.A_REVERSE
@@ -450,26 +476,127 @@ def render_inventory(stdscr: curses.window, profile: PlayerProfile, ui: UIState,
     bp = TOWER_BLUEPRINTS[sel_key]
     rinfo = RARITIES[bp.rarity]
     cnt = profile.inventory.get(sel_key, 0)
+    star = profile.star_of(sel_key)
+    has_dupe = cnt >= 2
+    star_txt = f"★{star}/{MAX_UNIT_STAR} (+{(star-1)*12}% DMG/+{(star-1)*6}% SPD)"
 
-    safe_addstr(stdscr, 3, ix, f"{bp.name} [{rinfo.label}] ({bp.role})"[:iw], cp(rarity_cp(bp.rarity), curses.A_BOLD))
-    safe_addstr(stdscr, 4, ix, f"Owned: {cnt}   Sell Value: {rinfo.sell_coins} Coins each"[:iw], cp(CP_GOLD))
+    safe_addstr(stdscr, 3, ix, f"{bp.name} [{rinfo.label}] {star_txt}"[:iw], cp(rarity_cp(bp.rarity), curses.A_BOLD))
+    up_cost_str = (
+        f"Next ★{star + 1}: {star_upgrade_coin_cost(bp.rarity, star + 1, has_dupe)}c"
+        + (" (1 dupe -50%)" if has_dupe else " (Coins)")
+        if cnt > 0 and star < MAX_UNIT_STAR
+        else ("MAX ★5" if cnt > 0 else "Locked")
+    )
+    safe_addstr(stdscr, 4, ix, f"Owned: {cnt} | Sell: {rinfo.sell_coins}c | {up_cost_str}"[:iw], cp(CP_GOLD))
     safe_addstr(stdscr, 5, ix, bp.description[:iw], cp(CP_DEFAULT))
     for lv_i, st in enumerate(bp.levels):
         line = f"Lv{lv_i + 1} ${st.cost:<4} DMG:{int(st.damage):<4} CD:{st.cooldown:.2f}s RNG:{st.range:.1f}"
         safe_addstr(stdscr, 7 + lv_i, ix, line[:iw], cp(CP_DIM))
 
     safe_addstr(stdscr, 12, rx + 1, "-" * (right_w - 2), cp(CP_DIM, curses.A_DIM))
-    safe_addstr(stdscr, 13, ix, f"LOADOUT ({len(profile.loadout)}/{MAX_LOADOUT}):", cp(CP_HUD, curses.A_BOLD))
+    safe_addstr(stdscr, 13, ix, f"LOADOUT ({len(profile.loadout)}/{profile.effective_max_loadout()}):", cp(CP_HUD, curses.A_BOLD))
     for s_i, lk in enumerate(profile.loadout):
         if 14 + s_i >= body_h - 3:
             break
         lbp = TOWER_BLUEPRINTS[lk]
-        safe_addstr(stdscr, 14 + s_i, ix + 1, f"{s_i + 1}. {lbp.name} ({lbp.role})"[: iw - 1], cp(rarity_cp(lbp.rarity)))
+        safe_addstr(stdscr, 14 + s_i, ix + 1, f"{s_i + 1}. {lbp.name} ★{profile.star_of(lk)} ({lbp.role})"[: iw - 1], cp(rarity_cp(lbp.rarity)))
 
     if ui.inv_msg:
         safe_addstr(stdscr, body_h - 2, ix, ui.inv_msg[:iw], cp(CP_GOOD, curses.A_BOLD))
 
-    controls = " [Up/Down] Select  [Space/Enter] Equip/Unequip (Max 8)  [S] Sell 1  [A] Sell All Dupes  [G] Gacha  [Esc/I] Lobby"
+    controls = " [Up/Down] Select  [Space] Equip  [U] Star-Up(★1-5)  [S] Sell 1  [A] Sell Dupes  [F] Forge/Altar  [Esc/I] Back"
+    safe_addstr(stdscr, max_y - 1, 0, controls[: max_x - 1], cp(CP_HUD))
+    stdscr.refresh()
+
+
+# ================= FUSION & SACRIFICE ALTAR SCREEN =================
+
+
+def render_forge(stdscr: curses.window, profile: PlayerProfile, ui: UIState, has_colors: bool) -> None:
+    stdscr.erase()
+    max_y, max_x = stdscr.getmaxyx()
+
+    def cp(pair_id: int, extra: int = 0) -> int:
+        return (curses.color_pair(pair_id) if has_colors else 0) | extra
+
+    top = f" FUSION & SACRIFICE ALTAR | Coins: {profile.coins} | Loadout Cap: {profile.effective_max_loadout()} | [Tab] Switch Panel"
+    safe_addstr(stdscr, 0, 0, top.ljust(max_x)[:max_x], cp(CP_GOLD, curses.A_BOLD))
+
+    left_w = max(42, (max_x * 48) // 100)
+    right_w = max_x - left_w - 1
+    body_h = max_y - 3
+
+    # Left: Recipe Fusions
+    l_title = "* RECIPE FUSION (FORGE MONARCHS) *" if ui.forge_tab == 0 else "RECIPE FUSION [Tab]"
+    draw_box(stdscr, 1, 0, body_h, left_w, l_title, cp(CP_GOOD if ui.forge_tab == 0 else CP_HUD, curses.A_BOLD))
+    ui.forge_fusion_idx = max(0, min(len(FUSION_RECIPES) - 1, ui.forge_fusion_idx))
+    lw = left_w - 4
+    y_cur = 3
+    for idx, rec in enumerate(FUSION_RECIPES):
+        if y_cur + 2 >= body_h:
+            break
+        sel = ui.forge_tab == 0 and idx == ui.forge_fusion_idx
+        bp_out = TOWER_BLUEPRINTS[rec.output_key]
+        bp_a = TOWER_BLUEPRINTS[rec.ing_a]
+        bp_b = TOWER_BLUEPRINTS[rec.ing_b]
+        ca = profile.inventory.get(rec.ing_a, 0)
+        cb = profile.inventory.get(rec.ing_b, 0)
+        ready = ca >= 1 and cb >= 1 and profile.coins >= rec.coin_cost
+        mark = ">>" if sel else "  "
+        head = f"{mark}{bp_out.name} [{RARITIES[bp_out.rarity].short}] ({rec.coin_cost}c)"
+        attr = cp(CP_GOOD if ready else CP_DIM, curses.A_BOLD if sel or ready else 0)
+        if sel:
+            attr |= curses.A_REVERSE
+        safe_addstr(stdscr, y_cur, 2, head[:lw], attr)
+        sub = f"   {bp_a.name}(x{ca}) + {bp_b.name}(x{cb}) -> Own:{profile.inventory.get(rec.output_key, 0)}"
+        safe_addstr(stdscr, y_cur + 1, 2, sub[:lw], cp(CP_DEFAULT if ca >= 1 and cb >= 1 else CP_DIM))
+        y_cur += 2
+
+    # Right: Sacrifice Altar
+    rx = left_w + 1
+    r_title = "* SACRIFICE ALTAR (3-RUN PERKS) *" if ui.forge_tab == 1 else "SACRIFICE ALTAR [Tab]"
+    draw_box(stdscr, 1, rx, body_h, right_w, r_title, cp(CP_WARN if ui.forge_tab == 1 else CP_HUD, curses.A_BOLD))
+    ix = rx + 2
+    iw = right_w - 4
+    ui.forge_perk_idx = max(0, min(len(SACRIFICE_PERKS) - 1, ui.forge_perk_idx))
+    ry = 3
+    for idx, perk in enumerate(SACRIFICE_PERKS):
+        if ry + 1 >= body_h - 6:
+            break
+        sel = ui.forge_tab == 1 and idx == ui.forge_perk_idx
+        attr = cp(CP_GOLD if sel else CP_DEFAULT, curses.A_BOLD if sel else 0)
+        if sel:
+            attr |= curses.A_REVERSE
+        safe_addstr(stdscr, ry, ix, f"{'>>' if sel else '  '}{perk.name}"[:iw], attr)
+        safe_addstr(stdscr, ry + 1, ix + 2, perk.description[: iw - 2], cp(CP_DIM))
+        ry += 2
+
+    # Qualifying Sacrifice Unit selector
+    sel_perk = SACRIFICE_PERKS[ui.forge_perk_idx]
+    qual = [
+        k
+        for k in TOWER_ORDER
+        if profile.inventory.get(k, 0) > 0
+        and unit_qualifies_for_perk(sel_perk, TOWER_BLUEPRINTS[k], profile.star_of(k))[0]
+    ]
+    safe_addstr(stdscr, max(ry, body_h - 6), rx + 1, "-" * (right_w - 2), cp(CP_DIM, curses.A_DIM))
+    uy = max(ry + 1, body_h - 5)
+    if qual:
+        ui.forge_unit_idx %= len(qual)
+        uk = qual[ui.forge_unit_idx]
+        ubp = TOWER_BLUEPRINTS[uk]
+        u_line = f"Sacrifice [< / >]: {ubp.name} ★{profile.star_of(uk)} (x{profile.inventory[uk]}) [{ui.forge_unit_idx + 1}/{len(qual)}]"
+        safe_addstr(stdscr, uy, ix, u_line[:iw], cp(CP_GOOD, curses.A_BOLD))
+    else:
+        safe_addstr(stdscr, uy, ix, "No qualifying unit in inventory for this perk yet.", cp(CP_ENEMY))
+
+    if profile.active_perks:
+        act = "Active: " + " | ".join(f"{p['name']}({p['runs_left']}r)" for p in profile.active_perks)
+        safe_addstr(stdscr, uy + 1, ix, act[:iw], cp(CP_GOLD))
+    if ui.forge_msg:
+        safe_addstr(stdscr, body_h - 1, ix, ui.forge_msg[:iw], cp(CP_GOOD, curses.A_BOLD))
+
+    controls = " [Tab] Switch Panel  [Up/Down] Select Recipe/Perk  [Left/Right] Pick Sacrifice Unit  [Space/Enter] Fuse/Sacrifice  [Esc/F] Back"
     safe_addstr(stdscr, max_y - 1, 0, controls[: max_x - 1], cp(CP_HUD))
     stdscr.refresh()
 
@@ -831,13 +958,16 @@ def render_game(stdscr: curses.window, state: GameState, ui: UIState, has_colors
 
     for idx, kind in enumerate(state.loadout):
         bp = TOWER_BLUEPRINTS[kind]
-        cost = bp.levels[0].cost
+        cost = state._tower_cost(bp.levels[0].cost)
         sel = state.selected_tower_kind == kind
         mark = ">" if sel else " "
         attr = cp(rarity_cp(bp.rarity), curses.A_BOLD) if state.gold >= cost else cp(CP_DIM, curses.A_DIM)
         if sel:
             attr |= curses.A_UNDERLINE
-        line = f"{mark}[{idx + 1}] {bp.symbol} {bp.name:<11} ${cost:<3} ({bp.role[:9]})"
+        key_lbl = "0" if idx == 9 else str(idx + 1)
+        star = state.unit_stars.get(kind, 1)
+        st_tag = f"★{star}" if star > 1 else "  "
+        line = f"{mark}[{key_lbl}] {bp.symbol} {bp.name:<11}{st_tag}${cost:<3} ({bp.role[:7]})"
         safe_addstr(stdscr, map_y + 1 + idx, ix, line[:iw], attr)
 
     div_y = map_y + 1 + max(len(state.loadout), 1)
@@ -856,7 +986,7 @@ def render_game(stdscr: curses.window, state: GameState, ui: UIState, has_colors
         st = hovered_tower.stats
         insp(
             0,
-            f"{hovered_tower.blueprint.name} Lv{hovered_tower.level} ({hovered_tower.x},{hovered_tower.y})",
+            f"{hovered_tower.blueprint.name} Lv{hovered_tower.level} ★{hovered_tower.star_level} ({hovered_tower.x},{hovered_tower.y})",
             cp(rarity_cp(hovered_tower.blueprint.rarity), curses.A_BOLD),
         )
         if st.income_per_wave > 0:
@@ -975,6 +1105,11 @@ def handle_setup_key(
         ui.return_mode = "setup"
         ui.mode = "inventory"
         return False, None
+    if key in (ord("f"), ord("F")):
+        ui.forge_msg = ""
+        ui.return_mode = "setup"
+        ui.mode = "forge"
+        return False, None
     if key in (ord("b"), ord("B")):
         ui.return_mode = "setup"
         ui.mode = "bestiary"
@@ -991,12 +1126,14 @@ def handle_setup_key(
         ui.setup_map_idx = (ui.setup_map_idx + 1) % len(MAPS)
     elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER, ord(" ")):
         diff_key = DIFFICULTY_ORDER[ui.setup_diff_idx]
+        run_perks = profile.consume_perks_for_run()
         ui.mode = "play"
         ui.return_mode = "play"
         return False, GameState(
             map_index=ui.setup_map_idx,
             difficulty_key=diff_key,
             profile=profile,
+            run_perks=run_perks,
         )
     return False, None
 
@@ -1038,6 +1175,10 @@ def handle_inventory_key(profile: PlayerProfile, ui: UIState, key: int) -> bool:
     if key in (ord("g"), ord("G")):
         ui.mode = "gacha"
         return False
+    if key in (ord("f"), ord("F")):
+        ui.forge_msg = ""
+        ui.mode = "forge"
+        return False
 
     ordered = sorted(
         TOWER_ORDER,
@@ -1049,11 +1190,60 @@ def handle_inventory_key(profile: PlayerProfile, ui: UIState, key: int) -> bool:
         ui.inv_cursor = min(len(ordered) - 1, ui.inv_cursor + 1)
     elif key in (ord(" "), ord("\n"), ord("\r"), curses.KEY_ENTER, ord("e"), ord("E")):
         _, ui.inv_msg = profile.toggle_loadout(ordered[ui.inv_cursor])
+    elif key in (ord("u"), ord("U")):
+        _, ui.inv_msg = profile.upgrade_unit_star(ordered[ui.inv_cursor], use_dupe=True)
     elif key in (ord("s"), ord("S"), ord("x"), ord("X")):
         _, _, ui.inv_msg = profile.sell_unit(ordered[ui.inv_cursor], 1)
     elif key in (ord("a"), ord("A")):
         sold, gained = profile.sell_all_duplicates()
         ui.inv_msg = f"Sold {sold} duplicate units for +{gained} Coins!" if sold > 0 else "No duplicates to sell."
+    return False
+
+
+def handle_forge_key(profile: PlayerProfile, ui: UIState, key: int) -> bool:
+    if key in (ord("q"), ord("Q")):
+        return True
+    if key in (ord("f"), ord("F"), 27):
+        ui.mode = "setup"
+        return False
+    if key in (ord("i"), ord("I")):
+        ui.mode = "inventory"
+        return False
+    if key == 9:  # Tab
+        ui.forge_tab = 1 - ui.forge_tab
+        return False
+    if key in (curses.KEY_UP, ord("w"), ord("W"), ord("k"), ord("K")):
+        if ui.forge_tab == 0:
+            ui.forge_fusion_idx = (ui.forge_fusion_idx - 1) % len(FUSION_RECIPES)
+        else:
+            ui.forge_perk_idx = (ui.forge_perk_idx - 1) % len(SACRIFICE_PERKS)
+            ui.forge_unit_idx = 0
+    elif key in (curses.KEY_DOWN, ord("s"), ord("S"), ord("j"), ord("J")):
+        if ui.forge_tab == 0:
+            ui.forge_fusion_idx = (ui.forge_fusion_idx + 1) % len(FUSION_RECIPES)
+        else:
+            ui.forge_perk_idx = (ui.forge_perk_idx + 1) % len(SACRIFICE_PERKS)
+            ui.forge_unit_idx = 0
+    elif ui.forge_tab == 1 and key in (curses.KEY_LEFT, ord("a"), ord("A"), ord("h"), ord("H")):
+        ui.forge_unit_idx = max(0, ui.forge_unit_idx - 1)
+    elif ui.forge_tab == 1 and key in (curses.KEY_RIGHT, ord("d"), ord("D"), ord("l"), ord("L")):
+        ui.forge_unit_idx += 1
+    elif key in (ord(" "), ord("\n"), ord("\r"), curses.KEY_ENTER):
+        if ui.forge_tab == 0:
+            _, ui.forge_msg = profile.craft_fusion(FUSION_RECIPES[ui.forge_fusion_idx].key)
+        else:
+            sel_perk = SACRIFICE_PERKS[ui.forge_perk_idx]
+            qual = [
+                k
+                for k in TOWER_ORDER
+                if profile.inventory.get(k, 0) > 0
+                and unit_qualifies_for_perk(sel_perk, TOWER_BLUEPRINTS[k], profile.star_of(k))[0]
+            ]
+            if not qual:
+                ui.forge_msg = "No qualifying unit to sacrifice!"
+            else:
+                uk = qual[ui.forge_unit_idx % len(qual)]
+                _, ui.forge_msg = profile.sacrifice_for_perk(sel_perk.key, uk)
     return False
 
 
@@ -1144,10 +1334,12 @@ def handle_play_key(state: GameState, ui: UIState, key: int) -> Tuple[bool, Game
             state.build_tower(state.cursor_x, state.cursor_y, state.selected_tower_kind)
         return False, state
 
-    if ord("1") <= key <= ord("8"):
+    if ord("1") <= key <= ord("9"):
         idx = key - ord("1")
         if idx < len(state.loadout):
             state.selected_tower_kind = state.loadout[idx]
+    elif key == ord("0") and len(state.loadout) >= 10:
+        state.selected_tower_kind = state.loadout[9]
 
     elif key in (ord("z"), ord("Z")):
         if ui.mass_anchor is None:
@@ -1251,6 +1443,9 @@ def run_app(stdscr: curses.window, quick_start: bool = False) -> None:
             elif ui.mode == "inventory":
                 if handle_inventory_key(profile, ui, key):
                     return
+            elif ui.mode == "forge":
+                if handle_forge_key(profile, ui, key):
+                    return
             elif ui.mode == "tavern":
                 if handle_tavern_key(state, ui, key):
                     return
@@ -1272,6 +1467,8 @@ def run_app(stdscr: curses.window, quick_start: bool = False) -> None:
             render_gacha(stdscr, profile, ui, has_colors)
         elif ui.mode == "inventory":
             render_inventory(stdscr, profile, ui, has_colors)
+        elif ui.mode == "forge":
+            render_forge(stdscr, profile, ui, has_colors)
         elif ui.mode == "bestiary" and ui.return_mode == "setup":
             stdscr.erase()
             render_bestiary_modal(stdscr, ui, has_colors)

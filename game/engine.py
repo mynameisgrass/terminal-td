@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import random
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 from game.data.difficulties import DIFFICULTIES
 from game.data.maps import MAPS
@@ -15,6 +15,7 @@ from game.models import (
     GRID_HEIGHT,
     GRID_WIDTH,
     MAX_LOADOUT,
+    MAX_PERK_LOADOUT,
     SPEED_OPTIONS,
     TARGET_CLOSEST,
     TARGET_FIRST,
@@ -72,6 +73,7 @@ class GameState:
         loadout: Optional[List[str]] = None,
         profile: Optional["PlayerProfile"] = None,
         rng: Optional[random.Random] = None,
+        run_perks: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.rng = rng or random.Random()
         self.profile = profile
@@ -82,8 +84,17 @@ class GameState:
             difficulty_key = "normal"
         self.difficulty: DifficultyConfig = DIFFICULTIES[difficulty_key]
 
+        perks = run_perks or {}
+        self.perk_dmg_mult: float = float(perks.get("dmg_mult", 1.0))
+        self.perk_spd_mult: float = float(perks.get("spd_mult", 1.0))
+        self.perk_coin_mult: float = float(perks.get("coin_mult", 1.0))
+        self.perk_cost_mult: float = float(perks.get("cost_mult", 1.0))
+        self.perk_labels: List[str] = list(perks.get("labels", []))
+        self.unit_stars: Dict[str, int] = dict(profile.unit_stars) if profile is not None else {}
+
+        eff_max_slots = min(MAX_PERK_LOADOUT, MAX_LOADOUT + int(perks.get("slot_bonus", 0)))
         raw_loadout = loadout if loadout is not None else (profile.loadout if profile else list(STARTER_LOADOUT))
-        clean = [k for k in raw_loadout if k in TOWER_BLUEPRINTS][:MAX_LOADOUT]
+        clean = [k for k in raw_loadout if k in TOWER_BLUEPRINTS][:eff_max_slots]
         self.loadout: List[str] = clean or list(STARTER_LOADOUT)
 
         self.map_index = map_index % len(MAPS)
@@ -99,8 +110,9 @@ class GameState:
         self._max_progress = float(len(self.centerline) - 1)
         self._buckets: List[List[Enemy]] = [[] for _ in range(BUCKET_W * BUCKET_H)]
 
-        self.gold: int = self.difficulty.starting_gold
-        self.lives: int = self.difficulty.starting_lives
+        self.gold: int = self.difficulty.starting_gold + int(perks.get("start_gold", 0))
+        self.lives: int = self.difficulty.starting_lives + int(perks.get("extra_lives", 0))
+        self.max_lives: int = self.lives
         self.score: int = 0
         self.coins_earned: int = 0
         self.wave: int = 0
@@ -134,8 +146,13 @@ class GameState:
         ]
         self._next_entity_id: int = 1
 
+    def _tower_cost(self, raw_cost: int) -> int:
+        if self.perk_cost_mult >= 0.999:
+            return raw_cost
+        return max(10, int(round((raw_cost * self.perk_cost_mult) / 5.0)) * 5)
+
     def _award_coins(self, base_coins: int) -> int:
-        gained = max(1, int(round(base_coins * self.difficulty.coin_mult)))
+        gained = max(1, int(round(base_coins * self.difficulty.coin_mult * self.perk_coin_mult)))
         self.coins_earned += gained
         if self.profile is not None:
             self.profile.coins += gained
@@ -241,7 +258,7 @@ class GameState:
             self.log("Occupied! [U] Upgrade or [X] Sell.")
             return False
         bp = TOWER_BLUEPRINTS[kind]
-        cost = bp.levels[0].cost
+        cost = self._tower_cost(bp.levels[0].cost)
         if self.gold < cost:
             self.log(f"Need ${cost} for {bp.name} (have ${self.gold}).")
             return False
@@ -252,9 +269,12 @@ class GameState:
             kind=kind,
             blueprints=TOWER_BLUEPRINTS,
             level=1,
+            star_level=self.unit_stars.get(kind, 1),
             total_invested=cost,
             income_timer=bp.levels[0].income_interval,
             spawn_timer=0.5 if bp.levels[0].spawn_ally_kind else 0.0,
+            perk_dmg_mult=self.perk_dmg_mult,
+            perk_spd_mult=self.perk_spd_mult,
         )
         self.towers[(x, y)] = t
         self.recompute_buffs()
@@ -268,10 +288,11 @@ class GameState:
         if tower is None:
             self.log("No tower here to upgrade.")
             return False
-        cost = tower.upgrade_cost
-        if cost is None:
+        raw_cost = tower.upgrade_cost
+        if raw_cost is None:
             self.log(f"{tower.blueprint.name} is already MAX level (Lv{tower.level})!")
             return False
+        cost = self._tower_cost(raw_cost)
         if self.gold < cost:
             self.log(f"Need ${cost} to upgrade {tower.blueprint.name}.")
             return False
@@ -317,10 +338,11 @@ class GameState:
             self.log("No buildable plots in selection.")
             return 0
         bp = TOWER_BLUEPRINTS[kind]
-        cost = bp.levels[0].cost
+        cost = self._tower_cost(bp.levels[0].cost)
         if self.gold < cost:
             self.log(f"Need ${cost} for {bp.name} (have ${self.gold}).")
             return 0
+        star = self.unit_stars.get(kind, 1)
         built = 0
         for x, y in candidates:
             if self.gold < cost:
@@ -332,9 +354,12 @@ class GameState:
                 kind=kind,
                 blueprints=TOWER_BLUEPRINTS,
                 level=1,
+                star_level=star,
                 total_invested=cost,
                 income_timer=bp.levels[0].income_interval,
                 spawn_timer=0.5 if bp.levels[0].spawn_ally_kind else 0.0,
+                perk_dmg_mult=self.perk_dmg_mult,
+                perk_spd_mult=self.perk_spd_mult,
             )
             built += 1
         if built > 0:
@@ -360,8 +385,11 @@ class GameState:
         upgraded = 0
         spent = 0
         for t in towers_in_box:
-            cost = t.upgrade_cost
-            if cost is None or self.gold < cost:
+            raw_cost = t.upgrade_cost
+            if raw_cost is None:
+                continue
+            cost = self._tower_cost(raw_cost)
+            if self.gold < cost:
                 continue
             self.gold -= cost
             t.level += 1
@@ -388,8 +416,9 @@ class GameState:
         farm_gold = 0
         for t in self.towers.values():
             if t.stats.income_per_wave > 0:
-                farm_gold += t.stats.income_per_wave
-                t.gold_earned += t.stats.income_per_wave
+                inc = int(round(t.stats.income_per_wave * t.star_inc_mult))
+                farm_gold += inc
+                t.gold_earned += inc
         return farm_gold
 
     def start_next_wave(self, forced: bool = False) -> bool:
@@ -658,7 +687,7 @@ class GameState:
             self.gold += enemy.reward
             self.score += enemy.reward * 2
             if enemy.is_boss:
-                coins = self._award_coins(14 + self.wave * 2)
+                coins = self._award_coins(6 + self.wave)
                 self.log(f"BOSS SLAIN: {enemy.name}! +{coins} Coins!")
             self._handle_death_split(enemy)
         return dmg
@@ -872,8 +901,9 @@ class GameState:
                 tower.income_timer -= dt
                 if tower.income_timer <= 0:
                     tower.income_timer += st.income_interval
-                    self.gold += st.income_per_tick
-                    tower.gold_earned += st.income_per_tick
+                    tick_inc = int(round(st.income_per_tick * tower.star_inc_mult))
+                    self.gold += tick_inc
+                    tower.gold_earned += tick_inc
             if st.heal_allies_per_sec > 0 and self.allies:
                 r_sq = tower.effective_range ** 2
                 for ally in self.allies:
@@ -1049,7 +1079,7 @@ class GameState:
                 self.game_over = True
                 self.wave_active = False
                 self.next_wave_timer = None
-                coins = self._award_coins(max(10, self.wave * 8))
+                coins = self._award_coins(max(4, self.wave * 2))
                 self.log(f"DEFEAT! Earned +{coins} Coins for your effort.")
                 return
 
@@ -1090,12 +1120,12 @@ class GameState:
             bonus = 25 + self.wave * 6 + farm_gold
             self.gold += bonus
             self.score += bonus * 3
-            coins = self._award_coins(14 + self.wave * 3)
+            coins = self._award_coins(4 + self.wave)
 
             if not self.endless and self.wave >= self.max_waves:
                 self.victory = True
                 self.next_wave_timer = None
-                win_coins = self._award_coins(300)
+                win_coins = self._award_coins(120)
                 if self.profile is not None:
                     self.profile.total_wins += 1
                     self.profile.save()

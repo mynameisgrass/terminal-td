@@ -14,11 +14,23 @@ sys.path.insert(0, ROOT)
 from game.data.banners import BANNERS, BANNER_ORDER  # noqa: E402
 from game.data.difficulties import DIFFICULTIES, DIFFICULTY_ORDER  # noqa: E402
 from game.data.maps import MAPS  # noqa: E402
+from game.data.progression import (  # noqa: E402
+    FUSION_RECIPES,
+    RARITY_STAR_MULT,
+    SACRIFICE_PERKS,
+    STAR_BASE_COSTS,
+)
 from game.data.rarities import RARITIES, RARITY_ORDER, STARTING_COINS  # noqa: E402
 from game.data.towers import STARTER_LOADOUT, TOWER_BLUEPRINTS, TOWER_ORDER  # noqa: E402
 from game.data.units import ALLY_TEMPLATES, UNIT_ORDER, UNIT_TEMPLATES  # noqa: E402
 from game.data.waves import WAVE_DEFINITIONS  # noqa: E402
-from game.models import GRID_HEIGHT, GRID_WIDTH, MAX_LOADOUT  # noqa: E402
+from game.models import (  # noqa: E402
+    GRID_HEIGHT,
+    GRID_WIDTH,
+    MAX_LOADOUT,
+    MAX_PERK_LOADOUT,
+    MAX_UNIT_STAR,
+)
 
 
 def main() -> None:
@@ -42,8 +54,14 @@ def main() -> None:
         "GRID_WIDTH": GRID_WIDTH,
         "GRID_HEIGHT": GRID_HEIGHT,
         "MAX_LOADOUT": MAX_LOADOUT,
+        "MAX_PERK_LOADOUT": MAX_PERK_LOADOUT,
+        "MAX_UNIT_STAR": MAX_UNIT_STAR,
         "STARTING_COINS": STARTING_COINS,
         "STARTER_LOADOUT": list(STARTER_LOADOUT),
+        "FUSION_RECIPES": [asdict(r) for r in FUSION_RECIPES],
+        "SACRIFICE_PERKS": [asdict(p) for p in SACRIFICE_PERKS],
+        "STAR_BASE_COSTS": STAR_BASE_COSTS,
+        "RARITY_STAR_MULT": RARITY_STAR_MULT,
         "RARITY_ORDER": list(RARITY_ORDER),
         "RARITIES": {k: asdict(v) for k, v in RARITIES.items()},
         "BANNER_ORDER": list(BANNER_ORDER),

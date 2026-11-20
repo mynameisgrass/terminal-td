@@ -1,4 +1,4 @@
-"""Defender unit (tower) catalog: 42 gacha units across 6 rarities, each with 5 upgrade levels."""
+"""Defender unit (tower) catalog: 62 gacha & fusion units across 6 rarities, each with 5 upgrade levels."""
 
 from __future__ import annotations
 
@@ -109,6 +109,14 @@ _TOWER_LIST: Tuple[TowerBlueprint, ...] = (
         TowerStats(1, 95, 14, 1.10, 2.5, income_per_wave=30, income_per_tick=5, income_interval=7.0),
         TowerStats(2, 110, 26, 0.95, 2.8, income_per_wave=55, income_per_tick=10, income_interval=6.2),
         TowerStats(3, 165, 48, 0.82, 3.2, income_per_wave=100, income_per_tick=18, income_interval=5.5)),
+    _bp("slingshot", "u", "Stone Slinger", "common", "Micro Splash", "Ultra-cheap $45 opener with small pebble splash.", "o",
+        TowerStats(1, 45, 9, 0.72, 4.2, splash_radius=1.2, splash_ratio=0.55),
+        TowerStats(2, 55, 17, 0.62, 4.6, splash_radius=1.4, splash_ratio=0.62),
+        TowerStats(3, 90, 31, 0.52, 5.1, splash_radius=1.6, splash_ratio=0.70)),
+    _bp("watchtower", "T", "Watchtower", "common", "Range + Scout", "Boosts nearby tower range +12% & fires bolts.", "+",
+        TowerStats(1, 85, 11, 0.75, 5.2, buff_rng_pct=0.12),
+        TowerStats(2, 95, 21, 0.65, 5.8, buff_rng_pct=0.18),
+        TowerStats(3, 145, 38, 0.56, 6.4, buff_rng_pct=0.26)),
 
     # ================= RARE (8) =================
     _bp("sniper", "S", "Sniper", "rare", "Long-Range Pierce", "Huge range, 100% armor pierce.", "+",
@@ -143,6 +151,14 @@ _TOWER_LIST: Tuple[TowerBlueprint, ...] = (
         TowerStats(1, 120, 22, 0.75, 4.8, chain_count=4, chain_falloff=0.78),
         TowerStats(2, 130, 38, 0.66, 5.3, chain_count=4, chain_falloff=0.82),
         TowerStats(3, 200, 66, 0.56, 5.8, chain_count=5, chain_falloff=0.86)),
+    _bp("venom_dart", "v", "Venom Blower", "rare", "Poison + Slow", "Rapid toxic darts slow & melt armored foes.", "~",
+        TowerStats(1, 105, 10, 0.52, 4.8, slow_factor=0.28, slow_duration=2.0, poison_dps=18, poison_duration=3.8, armor_pierce=1.0),
+        TowerStats(2, 115, 18, 0.46, 5.3, slow_factor=0.35, slow_duration=2.4, poison_dps=32, poison_duration=4.2, armor_pierce=1.0),
+        TowerStats(3, 180, 32, 0.40, 5.8, slow_factor=0.42, slow_duration=2.8, poison_dps=55, poison_duration=4.8, armor_pierce=1.0)),
+    _bp("anvil_smith", "&", "Forge Smith", "rare", "DMG Aura", "Forges +16% DMG aura & hammers nearby foes.", "=",
+        TowerStats(1, 130, 36, 1.15, 4.0, buff_dmg_pct=0.16, armor_shred=2.5),
+        TowerStats(2, 145, 64, 1.00, 4.5, buff_dmg_pct=0.24, armor_shred=4.0),
+        TowerStats(3, 215, 112, 0.88, 5.0, buff_dmg_pct=0.34, armor_shred=6.0)),
 
     # ================= EPIC (9) =================
     _bp("barracks", "B", "Barracks", "epic", "Unit Spawner", "Spawns Guards walking Base->Spawn to tank!", "!",
@@ -181,6 +197,14 @@ _TOWER_LIST: Tuple[TowerBlueprint, ...] = (
         TowerStats(1, 165, 18, 0.90, 5.0, spawn_ally_kind="combat_drone", spawn_interval=4.5, max_active_allies=4),
         TowerStats(2, 180, 32, 0.80, 5.5, spawn_ally_kind="combat_drone", spawn_interval=3.8, max_active_allies=5),
         TowerStats(3, 270, 54, 0.70, 6.0, spawn_ally_kind="combat_drone", spawn_interval=3.2, max_active_allies=6)),
+    _bp("garrison", "P", "Pike Bastion", "epic", "Tank Summoner", "Deploys Iron Vanguards + piercing spear thrusts!", "!",
+        TowerStats(1, 175, 30, 0.95, 4.2, armor_pierce=0.7, spawn_ally_kind="vanguard", spawn_interval=7.5, max_active_allies=2),
+        TowerStats(2, 195, 54, 0.82, 4.6, armor_pierce=0.85, spawn_ally_kind="vanguard", spawn_interval=6.2, max_active_allies=3),
+        TowerStats(3, 295, 96, 0.70, 5.2, armor_pierce=1.0, spawn_ally_kind="vanguard", spawn_interval=5.0, max_active_allies=4)),
+    _bp("bombardier", "o", "Siege Bomber", "epic", "Armor Cracker", "Massive bunker-buster shells shred heavy armor.", "@",
+        TowerStats(1, 185, 88, 1.80, 5.5, splash_radius=2.3, splash_ratio=0.78, armor_shred=8.0, armor_pierce=0.5),
+        TowerStats(2, 205, 155, 1.58, 6.1, splash_radius=2.6, splash_ratio=0.82, armor_shred=12.0, armor_pierce=0.65),
+        TowerStats(3, 315, 270, 1.38, 6.7, splash_radius=2.9, splash_ratio=0.86, armor_shred=18.0, armor_pierce=0.8)),
 
     # ================= LEGENDARY (8) =================
     _bp("accelerator", "L", "Accelerator", "legendary", "High-DPS Beam", "Sustained plasma melts bosses fast.", "|",
@@ -227,6 +251,14 @@ _TOWER_LIST: Tuple[TowerBlueprint, ...] = (
         TowerStats(1, 115, 110, 1.85, 7.2, armor_pierce=1.0),
         TowerStats(2, 130, 200, 1.65, 8.0, armor_pierce=1.0),
         TowerStats(3, 210, 360, 1.45, 9.0, armor_pierce=1.0)),
+    _bp("tempest_mage", "~", "Tempest Mage", "legendary", "Storm 6-Chain", "Cyclone lightning chains 6 targets & slows!", "^",
+        TowerStats(1, 215, 42, 0.72, 6.0, chain_count=5, chain_falloff=0.84, slow_factor=0.45, slow_duration=2.5, armor_pierce=0.7),
+        TowerStats(2, 240, 76, 0.62, 6.6, chain_count=6, chain_falloff=0.87, slow_factor=0.52, slow_duration=3.0, armor_pierce=0.85),
+        TowerStats(3, 360, 135, 0.52, 7.3, chain_count=7, chain_falloff=0.90, slow_factor=0.60, slow_duration=3.5, armor_pierce=1.0)),
+    _bp("chrono_warden", "K", "Chrono Warden", "legendary", "Stun + Haste", "Freezes packs in time & accelerates allies +28%!", "~",
+        TowerStats(1, 230, 34, 1.05, 5.4, splash_radius=2.1, splash_ratio=0.7, slow_factor=0.55, slow_duration=3.2, stun_duration=0.45, buff_spd_pct=0.28, buff_dmg_pct=0.14),
+        TowerStats(2, 255, 62, 0.92, 6.0, splash_radius=2.4, splash_ratio=0.78, slow_factor=0.64, slow_duration=3.8, stun_duration=0.60, buff_spd_pct=0.38, buff_dmg_pct=0.22),
+        TowerStats(3, 385, 110, 0.80, 6.8, splash_radius=2.7, splash_ratio=0.85, slow_factor=0.72, slow_duration=4.4, stun_duration=0.75, buff_spd_pct=0.48, buff_dmg_pct=0.30)),
 
     # ================= MYTHIC (8) =================
     _bp("eclipse_reaper", "E", "Eclipse Slayer", "mythic", "Cheap Boss-Slayer", "Only $130! Slow short-range execute, zero AoE.", "%",
@@ -261,8 +293,16 @@ _TOWER_LIST: Tuple[TowerBlueprint, ...] = (
         TowerStats(1, 330, 48, 0.55, 6.0, chain_count=3, chain_falloff=0.82, poison_dps=42, poison_duration=5.0, armor_shred=5.0, armor_pierce=1.0, execute_pct=0.08),
         TowerStats(2, 370, 86, 0.48, 6.6, chain_count=4, chain_falloff=0.86, poison_dps=75, poison_duration=5.5, armor_shred=8.0, armor_pierce=1.0, execute_pct=0.12),
         TowerStats(3, 550, 150, 0.40, 7.4, chain_count=5, chain_falloff=0.90, poison_dps=130, poison_duration=6.0, armor_shred=12.0, armor_pierce=1.0, execute_pct=0.16)),
+    _bp("solar_bastion", "#", "Solar Bastion", "mythic", "Champion+Heal", "Summons Solar Champions (2 revives) & heals allies!", "*",
+        TowerStats(1, 390, 52, 0.68, 6.2, splash_radius=2.0, splash_ratio=0.72, heal_allies_per_sec=36.0, spawn_ally_kind="solar_champion", spawn_interval=11.0, max_active_allies=2),
+        TowerStats(2, 440, 94, 0.58, 6.8, splash_radius=2.3, splash_ratio=0.80, heal_allies_per_sec=58.0, spawn_ally_kind="solar_champion", spawn_interval=9.0, max_active_allies=2),
+        TowerStats(3, 660, 168, 0.50, 7.5, splash_radius=2.6, splash_ratio=0.86, heal_allies_per_sec=90.0, spawn_ally_kind="solar_champion", spawn_interval=7.5, max_active_allies=3)),
+    _bp("king_midas", "$", "King Midas", "mythic", "Gold + Execute", "Gilded strikes execute bosses & mint Gold!", "$",
+        TowerStats(1, 280, 95, 1.15, 5.8, armor_pierce=0.9, execute_pct=0.12, income_per_wave=115, income_per_tick=20, income_interval=5.5),
+        TowerStats(2, 320, 175, 1.00, 6.4, armor_pierce=1.0, execute_pct=0.16, income_per_wave=210, income_per_tick=38, income_interval=4.8),
+        TowerStats(3, 490, 310, 0.85, 7.2, armor_pierce=1.0, execute_pct=0.22, income_per_wave=380, income_per_tick=70, income_interval=4.2)),
 
-    # ================= TRANSCENDENT (4) =================
+    # ================= TRANSCENDENT (8) =================
     _bp("astral_lance", "!", "Astral Lance", "transcendent", "Cheap God-Lance", "Only $150! Huge single-hit pierce & shred; slow CD.", "!",
         TowerStats(1, 150, 190, 1.60, 6.0, armor_pierce=1.0, armor_shred=6.0),
         TowerStats(2, 185, 345, 1.42, 6.6, armor_pierce=1.0, armor_shred=9.0),
@@ -279,6 +319,22 @@ _TOWER_LIST: Tuple[TowerBlueprint, ...] = (
         TowerStats(1, 400, 0, 99.0, 5.5, income_per_wave=260, income_per_tick=65, income_interval=4.0, buff_spd_pct=0.25, buff_rng_pct=0.20),
         TowerStats(2, 500, 0, 99.0, 6.2, income_per_wave=480, income_per_tick=120, income_interval=3.5, buff_spd_pct=0.35, buff_rng_pct=0.30),
         TowerStats(3, 760, 0, 99.0, 7.0, income_per_wave=850, income_per_tick=220, income_interval=3.0, buff_spd_pct=0.45, buff_rng_pct=0.40)),
+    _bp("zenith_forge", "Z", "Zenith Bank", "transcendent", "Cosmic Vault", "FUSION: Insane Gold output + 40% Haste/DMG aura!", "$",
+        TowerStats(1, 420, 32, 0.65, 6.5, armor_pierce=1.0, income_per_wave=320, income_per_tick=85, income_interval=3.6, buff_dmg_pct=0.24, buff_spd_pct=0.32, buff_rng_pct=0.25),
+        TowerStats(2, 520, 60, 0.55, 7.4, armor_pierce=1.0, income_per_wave=580, income_per_tick=160, income_interval=3.2, buff_dmg_pct=0.34, buff_spd_pct=0.42, buff_rng_pct=0.35),
+        TowerStats(3, 800, 110, 0.45, 8.2, armor_pierce=1.0, income_per_wave=980, income_per_tick=280, income_interval=2.8, buff_dmg_pct=0.45, buff_spd_pct=0.52, buff_rng_pct=0.45)),
+    _bp("prism_overlord", "*", "Prism Overlord", "transcendent", "Hyper 7-Beam", "FUSION: Ultra-fast 0.12s 7-chain prismatic laser!", "*",
+        TowerStats(1, 470, 58, 0.16, 7.8, chain_count=5, chain_falloff=0.88, armor_pierce=1.0, armor_shred=4.0),
+        TowerStats(2, 550, 105, 0.13, 8.6, chain_count=6, chain_falloff=0.91, armor_pierce=1.0, armor_shred=7.0),
+        TowerStats(3, 840, 190, 0.11, 9.6, chain_count=7, chain_falloff=0.94, armor_pierce=1.0, armor_shred=11.0)),
+    _bp("eclipse_titan", "E", "Eclipse Titan", "transcendent", "Mech + Execute", "FUSION: Deploys Colossal Mechs + 6-chain execute!", "%",
+        TowerStats(1, 480, 92, 0.42, 7.0, chain_count=4, chain_falloff=0.85, armor_pierce=1.0, armor_shred=9.0, execute_pct=0.14, spawn_ally_kind="colossal_mech", spawn_interval=10.5, max_active_allies=2),
+        TowerStats(2, 560, 165, 0.36, 7.8, chain_count=5, chain_falloff=0.88, armor_pierce=1.0, armor_shred=14.0, execute_pct=0.18, spawn_ally_kind="colossal_mech", spawn_interval=8.5, max_active_allies=3),
+        TowerStats(3, 860, 295, 0.30, 8.6, chain_count=6, chain_falloff=0.92, armor_pierce=1.0, armor_shred=20.0, execute_pct=0.24, spawn_ally_kind="colossal_mech", spawn_interval=7.0, max_active_allies=3)),
+    _bp("monarch_core", "M", "Monarch Core", "transcendent", "APEX MONARCH", "FUSION ULTRA: 4-Life Monarch Guards, 6-Chain & Aura!", "@",
+        TowerStats(1, 520, 105, 0.22, 8.2, splash_radius=2.5, splash_ratio=0.82, chain_count=5, chain_falloff=0.90, armor_pierce=1.0, execute_pct=0.15, buff_dmg_pct=0.32, buff_spd_pct=0.32, spawn_ally_kind="monarch_knight", spawn_interval=10.0, max_active_allies=2),
+        TowerStats(2, 620, 195, 0.18, 9.0, splash_radius=2.8, splash_ratio=0.86, chain_count=6, chain_falloff=0.92, armor_pierce=1.0, execute_pct=0.20, buff_dmg_pct=0.42, buff_spd_pct=0.42, spawn_ally_kind="monarch_knight", spawn_interval=8.0, max_active_allies=2),
+        TowerStats(3, 940, 340, 0.14, 10.0, splash_radius=3.2, splash_ratio=0.90, chain_count=7, chain_falloff=0.94, armor_pierce=1.0, execute_pct=0.25, buff_dmg_pct=0.55, buff_spd_pct=0.55, spawn_ally_kind="monarch_knight", spawn_interval=6.5, max_active_allies=3)),
 )
 
 TOWER_BLUEPRINTS: Dict[str, TowerBlueprint] = {t.key: t for t in _TOWER_LIST}

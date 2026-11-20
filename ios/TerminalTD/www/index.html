@@ -34,9 +34,10 @@
 
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-          <h3 style="margin:0;">3. Your 8-Slot Battle Loadout</h3>
+          <h3 style="margin:0;" id="lobby-loadout-title">3. Your 8-Slot Battle Loadout</h3>
           <button class="btn good" id="btn-start-battle" style="font-size:15px;padding:10px 20px;">START BATTLE</button>
         </div>
+        <div class="pill-row" id="lobby-perks-bar" style="margin-bottom:8px;"></div>
         <div class="loadout-grid" id="lobby-loadout"></div>
       </div>
     </section>
@@ -45,7 +46,7 @@
     <section class="screen" id="screen-gacha">
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-          <h3 style="margin:0;">Select Summon Banner (48 Collectible Units)</h3>
+          <h3 style="margin:0;">Select Summon Banner (62 Collectible Units)</h3>
           <div class="pill-row">
             <span class="pill" id="gacha-pity">Mythic Pity: 0/60</span>
             <button class="btn sm" id="btn-autosell">Auto-Sell: OFF</button>
@@ -78,10 +79,24 @@
       <div class="grid-2" id="inv-grid"></div>
     </section>
 
+    <!-- FORGE: FUSION & SACRIFICE ALTAR -->
+    <section class="screen" id="screen-forge">
+      <div class="card">
+        <h3 style="margin:0 0 4px 0;">Fusion Workshop (Combine Units -> Craft Monarchs!)</h3>
+        <p class="subtext" id="forge-msg" style="margin:0 0 8px 0;color:#4ade80;">Fuse 2 units + Coins to forge higher-tier &amp; Monarch Core units.</p>
+        <div class="grid-2" id="fusion-grid"></div>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 4px 0;">Sacrifice Altar (Trade Units -> Multi-Run Perks)</h3>
+        <div class="pill-row" id="altar-active-perks" style="margin-bottom:8px;"></div>
+        <div class="grid-2" id="altar-grid"></div>
+      </div>
+    </section>
+
     <!-- BESTIARY -->
     <section class="screen" id="screen-bestiary">
       <div class="card">
-        <h3>Bestiary: 52 Enemies, 10 Bosses & 11 Friendly Road Units</h3>
+        <h3>Bestiary: 52 Enemies, 10 Bosses &amp; 13 Friendly Road Units</h3>
         <div class="grid-2" id="bestiary-grid"></div>
       </div>
     </section>
@@ -149,6 +164,7 @@
       <button class="btn active" data-tab="lobby">[BATTLE]</button>
       <button class="btn" data-tab="gacha">[GACHA]</button>
       <button class="btn" data-tab="inventory">[LOADOUT]</button>
+      <button class="btn" data-tab="forge">[FORGE]</button>
       <button class="btn" data-tab="bestiary">[CODEX]</button>
     </nav>
   </div>

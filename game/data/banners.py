@@ -11,7 +11,7 @@ BANNERS: Dict[str, BannerDef] = {
     "standard": BannerDef(
         key="standard",
         name="Standard Banner",
-        description="All 48 units | Balanced rates | 10x guarantees Epic+ | Mythic pity @60",
+        description="All 62 units | Balanced rates | 10x guarantees Epic+ | Mythic pity @60",
         single_cost=100,
         multi_cost=900,
         min_10x_rarity="epic",
@@ -103,10 +103,29 @@ BANNERS: Dict[str, BannerDef] = {
             "mythic": 6.0,
             "transcendent": 1.5,
         },
-        featured_keys=("void_monarch", "eternal_phoenix", "quantum_bank"),
+        featured_keys=("void_monarch", "eternal_phoenix", "quantum_bank", "monarch_core", "king_midas"),
         featured_boost=2.5,
         pity_mythic_at=30,
     ),
+    "monarch_vault": BannerDef(
+        key="monarch_vault",
+        name="MONARCH VAULT BANNER",
+        description="Elite High-Tier Vault! 20% Leg | 7% Mythic | 2.5% Transc | Monarch Core rate-up!",
+        single_cost=300,
+        multi_cost=2700,
+        min_10x_rarity="legendary",
+        rarity_weights={
+            "common": 0.0,
+            "rare": 32.0,
+            "epic": 38.5,
+            "legendary": 20.0,
+            "mythic": 7.0,
+            "transcendent": 2.5,
+        },
+        featured_keys=("monarch_core", "prism_overlord", "eclipse_titan", "zenith_forge", "solar_bastion", "king_midas"),
+        featured_boost=3.2,
+        pity_mythic_at=25,
+    ),
 }
 
-BANNER_ORDER: Tuple[str, ...] = ("standard", "warfare", "support", "mythic_rush")
+BANNER_ORDER: Tuple[str, ...] = ("standard", "warfare", "support", "mythic_rush", "monarch_vault")

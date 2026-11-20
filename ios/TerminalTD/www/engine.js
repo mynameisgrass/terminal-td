@@ -4,12 +4,13 @@
   const SAVE_KEY = "terminal_td_ios_save_v1";
   const LANE_OFFSETS = [-0.42, 0.0, 0.42];
   const SPEED_OPTIONS = [1, 2, 3, 5, 10];
-  const AUTO_SELL_MODES = ["off", "dupes_c", "dupes_cr", "dupes_cre", "all_c", "all_cr"];
+  const AUTO_SELL_MODES = ["off", "dupes_c", "dupes_cr", "dupes_cre", "dupes_all", "all_c", "all_cr"];
   const AUTO_SELL_LABELS = {
     off: "OFF",
     dupes_c: "Dupes: Common",
     dupes_cr: "Dupes: C+Rare",
     dupes_cre: "Dupes: C+R+Epic",
+    dupes_all: "Dupes: EVERY",
     all_c: "ALL Common",
     all_cr: "ALL C+Rare",
   };
@@ -29,6 +30,8 @@
         coins: D.STARTING_COINS,
         inventory: inv,
         loadout: [...D.STARTER_LOADOUT],
+        unit_stars: {},
+        active_perks: [],
         auto_sell_mode: "off",
         pity_counter: 0,
         total_summons: 0,
@@ -52,22 +55,38 @@
       if (Object.keys(inv).length === 0) {
         for (const k of D.STARTER_LOADOUT) inv[k] = 1;
       }
+      const activePerks = Array.isArray(raw.active_perks)
+        ? raw.active_perks.filter((p) => p && Number(p.runs_left) > 0)
+        : [];
+      const slotBonus = activePerks.reduce(
+        (s, p) => (p.perk_type === "slot_bonus" ? s + Number(p.value || 0) : s),
+        0
+      );
+      const effMax = Math.min(D.MAX_PERK_LOADOUT || 10, D.MAX_LOADOUT + slotBonus);
       const seen = new Set();
       const loadout = [];
       for (const k of raw.loadout || []) {
-        if (inv[k] > 0 && D.TOWERS[k] && !seen.has(k) && loadout.length < D.MAX_LOADOUT) {
+        if (inv[k] > 0 && D.TOWERS[k] && !seen.has(k) && loadout.length < effMax) {
           seen.add(k);
           loadout.push(k);
         }
       }
       if (loadout.length === 0) {
-        for (const k of Object.keys(inv).slice(0, D.MAX_LOADOUT)) loadout.push(k);
+        for (const k of Object.keys(inv).slice(0, effMax)) loadout.push(k);
+      }
+      const unitStars = {};
+      for (const [k, v] of Object.entries(raw.unit_stars || {})) {
+        if (D.TOWERS[k] && Number(v) > 1) {
+          unitStars[k] = Math.min(D.MAX_UNIT_STAR || 5, Math.max(1, Math.floor(Number(v))));
+        }
       }
       const asm = AUTO_SELL_MODES.includes(raw.auto_sell_mode) ? raw.auto_sell_mode : "off";
       return {
         coins: Math.max(0, Math.floor(Number(raw.coins ?? D.STARTING_COINS))),
         inventory: inv,
         loadout,
+        unit_stars: unitStars,
+        active_perks: activePerks,
         auto_sell_mode: asm,
         pity_counter: Math.max(0, Math.floor(Number(raw.pity_counter || 0))),
         total_summons: Math.max(0, Math.floor(Number(raw.total_summons || 0))),
@@ -89,6 +108,38 @@
     return Object.values(profile.inventory).reduce((a, b) => a + b, 0);
   }
 
+  function starOf(profile, key) {
+    return Math.min(D.MAX_UNIT_STAR || 5, Math.max(1, Math.floor(Number((profile.unit_stars && profile.unit_stars[key]) || 1))));
+  }
+
+  function effectiveMaxLoadout(profile) {
+    const bonus = (profile.active_perks || []).reduce(
+      (s, p) => (p.perk_type === "slot_bonus" && Number(p.runs_left) > 0 ? s + Number(p.value || 0) : s),
+      0
+    );
+    return Math.min(D.MAX_PERK_LOADOUT || 10, D.MAX_LOADOUT + bonus);
+  }
+
+  function starUpgradeCoinCost(rarity, nextStar, hasDupe) {
+    const base = (D.STAR_BASE_COSTS && D.STAR_BASE_COSTS[nextStar]) || 1200;
+    const mult = (D.RARITY_STAR_MULT && D.RARITY_STAR_MULT[rarity]) || 1.0;
+    const full = Math.round((base * mult) / 10) * 10;
+    return hasDupe ? Math.max(20, Math.ceil(full / 2)) : Math.max(30, full);
+  }
+
+  function unitQualifiesForPerk(perk, bp, starLevel) {
+    if ((perk.preferred_units || []).includes(bp.key)) return { ok: true, msg: "" };
+    const rIdx = D.RARITY_ORDER.indexOf(bp.rarity);
+    const reqIdx = D.RARITY_ORDER.indexOf(perk.min_rarity);
+    if (perk.key === "monarch_slot") {
+      if (bp.rarity === "transcendent" && starLevel >= perk.min_star_override) return { ok: true, msg: "" };
+      return { ok: false, msg: `Requires Monarch Core or ★${perk.min_star_override}+ Transcendent unit.` };
+    }
+    if (rIdx >= reqIdx) return { ok: true, msg: "" };
+    if (rIdx === reqIdx - 1 && starLevel >= Math.max(2, perk.min_star_override || 2)) return { ok: true, msg: "" };
+    return { ok: false, msg: `Requires ${D.RARITIES[perk.min_rarity].label}+ unit.` };
+  }
+
   function shouldAutoSell(profile, key, ownedBefore) {
     const mode = profile.auto_sell_mode;
     if (mode === "off" || !D.TOWERS[key]) return false;
@@ -96,6 +147,7 @@
     if (mode === "dupes_c") return ownedBefore > 0 && rar === "common";
     if (mode === "dupes_cr") return ownedBefore > 0 && (rar === "common" || rar === "rare");
     if (mode === "dupes_cre") return ownedBefore > 0 && ["common", "rare", "epic"].includes(rar);
+    if (mode === "dupes_all") return ownedBefore > 0;
     if (mode === "all_c") return rar === "common" && ownedTotal(profile) >= 1;
     if (mode === "all_cr") return (rar === "common" || rar === "rare") && ownedTotal(profile) >= 1;
     return false;
@@ -111,6 +163,7 @@
   function toggleLoadout(profile, key) {
     if (!profile.inventory[key]) return { ok: false, msg: "You don't own that unit." };
     const bp = D.TOWERS[key];
+    const maxSlots = effectiveMaxLoadout(profile);
     const idx = profile.loadout.indexOf(key);
     if (idx >= 0) {
       if (profile.loadout.length <= 1) return { ok: false, msg: "Keep at least 1 unit in Loadout!" };
@@ -118,8 +171,8 @@
       saveProfile(profile);
       return { ok: true, msg: `Unequipped ${bp.name}.` };
     }
-    if (profile.loadout.length >= D.MAX_LOADOUT) {
-      return { ok: false, msg: `Loadout full (max ${D.MAX_LOADOUT})!` };
+    if (profile.loadout.length >= maxSlots) {
+      return { ok: false, msg: `Loadout full (max ${maxSlots})!` };
     }
     profile.loadout.push(key);
     saveProfile(profile);
@@ -168,6 +221,166 @@
       saveProfile(profile);
     }
     return { sold, gained };
+  }
+
+  function _consumeOneCopy(profile, key) {
+    const rem = (profile.inventory[key] || 0) - 1;
+    if (rem <= 0) {
+      delete profile.inventory[key];
+      if (profile.unit_stars) delete profile.unit_stars[key];
+      const lidx = profile.loadout.indexOf(key);
+      if (lidx >= 0) {
+        profile.loadout.splice(lidx, 1);
+        if (profile.loadout.length === 0) {
+          const first = Object.keys(profile.inventory)[0];
+          if (first) profile.loadout.push(first);
+        }
+      }
+    } else {
+      profile.inventory[key] = rem;
+    }
+  }
+
+  function upgradeUnitStar(profile, key, useDupe = true) {
+    const owned = profile.inventory[key] || 0;
+    if (owned <= 0 || !D.TOWERS[key]) return { ok: false, msg: "You don't own this unit." };
+    const curStar = starOf(profile, key);
+    const maxStar = D.MAX_UNIT_STAR || 5;
+    if (curStar >= maxStar) return { ok: false, msg: `${D.TOWERS[key].name} is already MAX ★${maxStar}!` };
+    const bp = D.TOWERS[key];
+    const hasDupe = useDupe && owned >= 2;
+    const cost = starUpgradeCoinCost(bp.rarity, curStar + 1, hasDupe);
+    if (profile.coins < cost) return { ok: false, msg: `Need ${cost}c to Star-Up ${bp.name} (have ${profile.coins}c).` };
+    profile.coins -= cost;
+    if (hasDupe) profile.inventory[key] = owned - 1;
+    if (!profile.unit_stars) profile.unit_stars = {};
+    profile.unit_stars[key] = curStar + 1;
+    saveProfile(profile);
+    return { ok: true, msg: `${bp.name} upgraded to ★${curStar + 1} (${cost}c${hasDupe ? ", 1 dupe -50%" : ""})!` };
+  }
+
+  function craftFusion(profile, recipeKey) {
+    const recipe = (D.FUSION_RECIPES || []).find((r) => r.key === recipeKey);
+    if (!recipe || !D.TOWERS[recipe.output_key]) return { ok: false, msg: "Unknown fusion recipe." };
+    const ca = profile.inventory[recipe.ing_a] || 0;
+    const cb = profile.inventory[recipe.ing_b] || 0;
+    const bpa = D.TOWERS[recipe.ing_a];
+    const bpb = D.TOWERS[recipe.ing_b];
+    const bpo = D.TOWERS[recipe.output_key];
+    if (recipe.ing_a === recipe.ing_b ? ca < 2 : ca < 1 || cb < 1) {
+      return { ok: false, msg: `Need ${bpa.name} + ${bpb.name} to fuse ${bpo.name}.` };
+    }
+    if (profile.coins < recipe.coin_cost) {
+      return { ok: false, msg: `Need ${recipe.coin_cost}c to craft ${bpo.name}!` };
+    }
+    profile.coins -= recipe.coin_cost;
+    _consumeOneCopy(profile, recipe.ing_a);
+    _consumeOneCopy(profile, recipe.ing_b);
+    profile.inventory[recipe.output_key] = (profile.inventory[recipe.output_key] || 0) + 1;
+    if (profile.loadout.length < effectiveMaxLoadout(profile) && !profile.loadout.includes(recipe.output_key)) {
+      profile.loadout.push(recipe.output_key);
+    }
+    saveProfile(profile);
+    if (window.TDAudio) window.TDAudio.playGacha(true);
+    return { ok: true, msg: `FUSION SUCCESS! Forged [${D.RARITIES[bpo.rarity].label}] ${bpo.name}!` };
+  }
+
+  function sacrificeForPerk(profile, perkKey, unitKey) {
+    const perk = (D.SACRIFICE_PERKS || []).find((p) => p.key === perkKey);
+    if (!perk) return { ok: false, msg: "Unknown Altar perk." };
+    const owned = profile.inventory[unitKey] || 0;
+    if (owned <= 0 || !D.TOWERS[unitKey]) return { ok: false, msg: "Unit not owned." };
+    if (ownedTotal(profile) <= 1) return { ok: false, msg: "Cannot sacrifice your very last unit!" };
+    const bp = D.TOWERS[unitKey];
+    const star = starOf(profile, unitKey);
+    const q = unitQualifiesForPerk(perk, bp, star);
+    if (!q.ok) return { ok: false, msg: q.msg };
+    if (!profile.active_perks) profile.active_perks = [];
+
+    const runs = perk.duration_runs + (star >= 3 ? 1 : 0);
+    if (perk.perk_type === "slot_bonus") {
+      const curSlots = profile.active_perks.reduce((s, p) => (p.perk_type === "slot_bonus" ? s + Number(p.value || 0) : s), 0);
+      if (curSlots >= 2) {
+        for (const p of profile.active_perks) {
+          if (p.perk_type === "slot_bonus") p.runs_left = Math.max(Number(p.runs_left || 0), runs);
+        }
+        _consumeOneCopy(profile, unitKey);
+        saveProfile(profile);
+        return { ok: true, msg: `Sacrificed ${bp.name} ★${star} to extend +2 Slots!` };
+      }
+    }
+
+    let val = Number(perk.value);
+    const rIdx = D.RARITY_ORDER.indexOf(bp.rarity);
+    if (perk.key === "war_chest" && rIdx >= D.RARITY_ORDER.indexOf("mythic")) val = 225;
+    else if (perk.key === "titan_heart" && rIdx >= D.RARITY_ORDER.indexOf("legendary")) val = 18;
+    else if (perk.key === "fortune_crown" && rIdx >= D.RARITY_ORDER.indexOf("mythic")) val = 0.6;
+    else if (perk.key === "chrono_overclock" && bp.rarity === "transcendent") val = 0.28;
+
+    _consumeOneCopy(profile, unitKey);
+    if (perk.perk_type === "slot_bonus") {
+      profile.active_perks.push({
+        perk_key: perk.key,
+        name: perk.name,
+        perk_type: perk.perk_type,
+        value: Math.round(val),
+        runs_left: runs,
+        source_name: bp.name,
+      });
+    } else {
+      const ex = profile.active_perks.find((p) => p.perk_key === perk.key);
+      if (ex) {
+        ex.value = Math.max(Number(ex.value || 0), val);
+        ex.runs_left = Math.max(Number(ex.runs_left || 0), runs);
+        ex.source_name = bp.name;
+      } else {
+        profile.active_perks.push({
+          perk_key: perk.key,
+          name: perk.name,
+          perk_type: perk.perk_type,
+          value: val,
+          runs_left: runs,
+          source_name: bp.name,
+        });
+      }
+    }
+    saveProfile(profile);
+    if (window.TDAudio) window.TDAudio.playUpgrade();
+    return { ok: true, msg: `ALTAR BLESSING: Sacrificed ${bp.name} ★${star} -> ${perk.name} (${runs} runs)!` };
+  }
+
+  function consumePerksForRun(profile) {
+    const snap = {
+      slot_bonus: 0,
+      start_gold: 0,
+      extra_lives: 0,
+      dmg_mult: 1.0,
+      spd_mult: 1.0,
+      coin_mult: 1.0,
+      cost_mult: 1.0,
+      labels: [],
+    };
+    const nextPerks = [];
+    for (const p of profile.active_perks || []) {
+      const runs = Math.floor(Number(p.runs_left || 0));
+      if (runs <= 0) continue;
+      const val = Number(p.value || 0);
+      if (p.perk_type === "slot_bonus") snap.slot_bonus += Math.round(val);
+      else if (p.perk_type === "start_gold") snap.start_gold += Math.round(val);
+      else if (p.perk_type === "extra_lives") snap.extra_lives += Math.round(val);
+      else if (p.perk_type === "dps_overclock") {
+        snap.dmg_mult += val;
+        snap.spd_mult += val * 0.75;
+      } else if (p.perk_type === "coin_mult") snap.coin_mult += val;
+      else if (p.perk_type === "cost_discount") snap.cost_mult = Math.max(0.65, snap.cost_mult - val);
+      snap.labels.push(`${p.name} (${runs}r)`);
+      if (runs - 1 > 0) nextPerks.push({ ...p, runs_left: runs - 1 });
+    }
+    profile.active_perks = nextPerks;
+    const effMax = effectiveMaxLoadout(profile);
+    if (profile.loadout.length > effMax) profile.loadout = profile.loadout.slice(0, effMax);
+    saveProfile(profile);
+    return snap;
   }
 
   function rollBannerUnit(banner, minRarity) {
@@ -290,7 +503,7 @@
   }
 
   class GameBattle {
-    constructor(mapIndex, difficultyKey, profile) {
+    constructor(mapIndex, difficultyKey, profile, runPerks = null) {
       this.profile = profile;
       this.width = D.GRID_WIDTH;
       this.height = D.GRID_HEIGHT;
@@ -301,12 +514,21 @@
       this.spawnSet = new Set(this.mapDef.spawn_cells.map(([x, y]) => `${x},${y}`));
       this.baseSet = new Set(this.mapDef.base_cells.map(([x, y]) => `${x},${y}`));
 
-      this.loadout = profile.loadout.slice(0, D.MAX_LOADOUT);
+      const perks = runPerks || {};
+      this.perkDmgMult = Number(perks.dmg_mult || 1.0);
+      this.perkSpdMult = Number(perks.spd_mult || 1.0);
+      this.perkCoinMult = Number(perks.coin_mult || 1.0);
+      this.perkCostMult = Number(perks.cost_mult || 1.0);
+      this.perkLabels = perks.labels || [];
+      this.unitStars = { ...(profile.unit_stars || {}) };
+
+      const effMaxSlots = Math.min(D.MAX_PERK_LOADOUT || 10, D.MAX_LOADOUT + Math.round(Number(perks.slot_bonus || 0)));
+      this.loadout = profile.loadout.slice(0, effMaxSlots);
       this.selectedTowerKind = this.loadout[0];
 
-      this.gold = this.difficulty.starting_gold;
-      this.lives = this.difficulty.starting_lives;
-      this.maxLives = this.difficulty.starting_lives;
+      this.gold = this.difficulty.starting_gold + Math.round(Number(perks.start_gold || 0));
+      this.lives = this.difficulty.starting_lives + Math.round(Number(perks.extra_lives || 0));
+      this.maxLives = this.lives;
       this.score = 0;
       this.coinsEarned = 0;
       this.wave = 0;
@@ -346,8 +568,13 @@
       if (this.logs.length > 8) this.logs.shift();
     }
 
+    towerCost(rawCost) {
+      if (this.perkCostMult >= 0.999) return rawCost;
+      return Math.max(10, Math.round((rawCost * this.perkCostMult) / 5) * 5);
+    }
+
     awardCoins(base) {
-      const gained = Math.max(1, Math.round(base * this.difficulty.coin_mult));
+      const gained = Math.max(1, Math.round(base * this.difficulty.coin_mult * this.perkCoinMult));
       this.coinsEarned += gained;
       this.profile.coins += gained;
       this.profile.best_wave = Math.max(this.profile.best_wave, this.wave);
@@ -392,14 +619,19 @@
       if (this.gameOver || !this.canBuildAt(x, y)) return false;
       const bp = D.TOWERS[kind];
       if (!bp) return false;
-      const cost = bp.levels[0].cost;
+      const cost = this.towerCost(bp.levels[0].cost);
       if (this.gold < cost) {
         this.log(`Need $${cost} for ${bp.name} (have $${this.gold}).`);
         return false;
       }
       this.gold -= cost;
+      const starLevel = Math.min(D.MAX_UNIT_STAR || 5, Math.max(1, Math.floor(Number(this.unitStars[kind] || 1))));
       const t = {
         x, y, kind, level: 1,
+        starLevel,
+        starDmgMult: 1 + 0.12 * (starLevel - 1),
+        starSpdMult: 1 + 0.06 * (starLevel - 1),
+        starIncMult: 1 + 0.05 * (starLevel - 1),
         cooldownLeft: 0,
         incomeTimer: bp.levels[0].income_interval || 0,
         spawnTimer: bp.levels[0].spawn_ally_kind ? 0.4 : 0,
@@ -423,7 +655,7 @@
       if (!t || this.gameOver) return false;
       const bp = D.TOWERS[t.kind];
       if (t.level >= bp.levels.length) return false;
-      const cost = bp.levels[t.level].cost;
+      const cost = this.towerCost(bp.levels[t.level].cost);
       if (this.gold < cost) {
         this.log(`Need $${cost} to upgrade ${bp.name}.`);
         return false;
@@ -481,9 +713,10 @@
       for (const t of this.towers.values()) {
         const st = this.towerStats(t);
         if (st.income_per_wave > 0) {
-          sum += st.income_per_wave;
-          t.goldEarned += st.income_per_wave;
-          this.emitFloat(t.x + 0.5, t.y, `+$${st.income_per_wave}`, "#fbbf24", 0.9);
+          const inc = Math.round(st.income_per_wave * (t.starIncMult || 1));
+          sum += inc;
+          t.goldEarned += inc;
+          this.emitFloat(t.x + 0.5, t.y, `+$${inc}`, "#fbbf24", 0.9);
         }
       }
       return sum;
@@ -688,7 +921,7 @@
         this.gold += enemy.reward;
         this.score += enemy.reward * 2;
         if (enemy.tpl.is_boss) {
-          const coins = this.awardCoins(14 + this.wave * 2);
+          const coins = this.awardCoins(6 + this.wave);
           this.log(`BOSS SLAIN: ${enemy.tpl.name}! +${coins} Coins!`);
         }
         if (enemy.tpl.split_into && enemy.tpl.split_count > 0) {
@@ -911,9 +1144,10 @@
           t.incomeTimer -= dt;
           if (t.incomeTimer <= 0) {
             t.incomeTimer += st.income_interval;
-            this.gold += st.income_per_tick;
-            t.goldEarned += st.income_per_tick;
-            if (emitVisuals) this.emitFloat(t.x + 0.5, t.y, `+$${st.income_per_tick}`, "#fbbf24", 0.7);
+            const inc = Math.round(st.income_per_tick * (t.starIncMult || 1));
+            this.gold += inc;
+            t.goldEarned += inc;
+            if (emitVisuals) this.emitFloat(t.x + 0.5, t.y, `+$${inc}`, "#fbbf24", 0.7);
           }
         }
         if (st.heal_allies_per_sec > 0 && this.allies.length > 0) {
@@ -1126,7 +1360,7 @@
           this.gameOver = true;
           this.waveActive = false;
           this.nextWaveTimer = null;
-          const coins = this.awardCoins(Math.max(10, this.wave * 8));
+          const coins = this.awardCoins(Math.max(4, this.wave * 2));
           this.log(`DEFEAT! Earned +${coins} Coins.`);
           return;
         }
@@ -1142,9 +1376,11 @@
         t.cooldownLeft -= dt;
         if (t.cooldownLeft > 0 || this.enemies.length === 0) continue;
 
-        const effCd = Math.max(0.05, st.cooldown / Math.max(0.5, t.buffSpd));
+        const spdMult = t.buffSpd * (t.starSpdMult || 1) * this.perkSpdMult;
+        const dmgMult = t.buffDmg * (t.starDmgMult || 1) * this.perkDmgMult;
+        const effCd = Math.max(0.05, st.cooldown / Math.max(0.5, spdMult));
         const shotsReady = Math.min(4, 1 + Math.floor(-t.cooldownLeft / effCd));
-        const effDmg = st.damage * t.buffDmg;
+        const effDmg = st.damage * dmgMult;
         const effR = st.range * t.buffRng;
         const effRSq = effR * effR;
         const minRSq = st.min_range * st.min_range;
@@ -1171,12 +1407,12 @@
         const bonus = 25 + this.wave * 6 + farmGold;
         this.gold += bonus;
         this.score += bonus * 3;
-        const coins = this.awardCoins(14 + this.wave * 3);
+        const coins = this.awardCoins(4 + this.wave);
 
         if (!this.endless && this.wave >= this.maxWaves) {
           this.victory = true;
           this.nextWaveTimer = null;
-          const winCoins = this.awardCoins(300);
+          const winCoins = this.awardCoins(120);
           this.profile.total_wins += 1;
           saveProfile(this.profile);
           this.log(`VICTORY! +$${bonus} Gold | +${coins + winCoins} Coins!`);
@@ -1193,10 +1429,18 @@
     createProfile,
     saveProfile,
     ownedTotal,
+    starOf,
+    effectiveMaxLoadout,
+    starUpgradeCoinCost,
+    unitQualifiesForPerk,
     cycleAutoSell,
     toggleLoadout,
     sellUnit,
     sellAllDuplicates,
+    upgradeUnitStar,
+    craftFusion,
+    sacrificeForPerk,
+    consumePerksForRun,
     summonBanner,
     GameBattle,
   };
