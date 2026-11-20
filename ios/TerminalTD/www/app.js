@@ -295,16 +295,24 @@
       $("btn-wave").textContent = `Start Wave ${battle.wave + 1}`;
     }
 
-    // Boss HP Bar
+    // Boss HP Bar (ASCII)
     const bosses = battle.enemies.filter((e) => e.tpl.is_boss && e.hp > 0);
     if (bosses.length > 0) {
       const b = bosses.reduce((a, c) => (c.progress > a.progress ? c : a));
+      const ratio = Math.max(0, Math.min(1, b.hp / b.maxHp));
+      const filled = Math.round(ratio * 18);
       $("boss-bar").classList.add("show");
       $("boss-name").textContent = `BOSS: ${b.tpl.name}${bosses.length > 1 ? ` (x${bosses.length})` : ""}`;
-      $("boss-fill").style.width = `${Math.max(0, Math.min(100, (b.hp / b.maxHp) * 100))}%`;
+      $("boss-fill").textContent = `[${"#".repeat(filled)}${"-".repeat(18 - filled)}]`;
       $("boss-hp-txt").textContent = `${Math.ceil(b.hp)}/${Math.ceil(b.maxHp)}${b.shield > 0 ? ` +${Math.ceil(b.shield)}SH` : ""}`;
     } else {
       $("boss-bar").classList.remove("show");
+    }
+
+    // Battle log line
+    const logEl = $("battle-log-line");
+    if (logEl && battle.logs.length > 0) {
+      logEl.textContent = `> ${battle.logs[battle.logs.length - 1]}`;
     }
 
     // Selected Tower Inspector
@@ -454,7 +462,7 @@
 
   $("btn-mute").onclick = () => {
     const m = window.TDAudio.toggleMute();
-    $("btn-mute").textContent = m ? "SFX: OFF" : "SFX: ON";
+    $("btn-mute").textContent = m ? "[SFX:OFF]" : "[SFX:ON]";
   };
 
   $("btn-roll-1").onclick = () => showPulls(E.summonBanner(profile, selectedBanner, 1));

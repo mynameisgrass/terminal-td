@@ -11,11 +11,11 @@
 <body>
   <div id="app">
     <header class="topbar" id="lobby-topbar">
-      <div class="brand">BASTION TD</div>
+      <div class="brand">[ BASTION TD :: ASCII ]</div>
       <div class="pill-row">
         <span class="pill coins" id="hud-coins">Coins: 1000</span>
         <span class="pill" id="hud-stats">Wins: 0</span>
-        <button class="btn sm" id="btn-mute">SFX: ON</button>
+        <button class="btn sm" id="btn-mute">[SFX:ON]</button>
       </div>
     </header>
 
@@ -107,7 +107,7 @@
 
       <div class="boss-bar" id="boss-bar">
         <span id="boss-name">BOSS</span>
-        <div class="boss-track"><div class="boss-fill" id="boss-fill"></div></div>
+        <span class="boss-ascii" id="boss-fill">[####################]</span>
         <span id="boss-hp-txt">0/0</span>
       </div>
 
@@ -115,16 +115,18 @@
         <canvas id="battle-canvas"></canvas>
       </div>
 
+      <div id="battle-log-line" class="subtext" style="padding:2px 8px;background:#08110e;border-top:1px solid #1e4d3a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">&gt; Ready.</div>
+
       <div class="inspector-bar" id="inspector-bar">
         <div>
           <strong id="insp-title">Tower</strong>
           <span class="subtext" id="insp-stats"></span>
         </div>
         <div class="pill-row">
-          <button class="btn sm good" id="btn-insp-upgr">Upgrade</button>
-          <button class="btn sm" id="btn-insp-tgt">Target: first</button>
-          <button class="btn sm bad" id="btn-insp-sell">Sell</button>
-          <button class="btn sm" id="btn-insp-close">X</button>
+          <button class="btn sm good" id="btn-insp-upgr">[UPGRADE]</button>
+          <button class="btn sm" id="btn-insp-tgt">[TGT:first]</button>
+          <button class="btn sm bad" id="btn-insp-sell">[SELL]</button>
+          <button class="btn sm" id="btn-insp-close">[X]</button>
         </div>
       </div>
 
@@ -132,10 +134,10 @@
     </section>
 
     <nav class="navbar" id="lobby-navbar">
-      <button class="btn active" data-tab="lobby">Battle</button>
-      <button class="btn" data-tab="gacha">Gacha</button>
-      <button class="btn" data-tab="inventory">Loadout</button>
-      <button class="btn" data-tab="bestiary">Bestiary</button>
+      <button class="btn active" data-tab="lobby">[BATTLE]</button>
+      <button class="btn" data-tab="gacha">[GACHA]</button>
+      <button class="btn" data-tab="inventory">[LOADOUT]</button>
+      <button class="btn" data-tab="bestiary">[CODEX]</button>
     </nav>
   </div>
 
