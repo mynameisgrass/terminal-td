@@ -471,7 +471,7 @@
         if (st.income_per_wave > 0) {
           sum += st.income_per_wave;
           t.goldEarned += st.income_per_wave;
-          this.floatTexts.push({ x: t.x + 0.5, y: t.y, text: `+$${st.income_per_wave}`, color: "#fbbf24", ttl: 0.9 });
+          this.emitFloat(t.x + 0.5, t.y, `+$${st.income_per_wave}`, "#fbbf24", 0.9);
         }
       }
       return sum;
@@ -543,6 +543,7 @@
       const tpl = D.UNITS[kind];
       const hp = tpl.max_hp * hpScale * this.difficulty.enemy_hp_mult;
       const lane = laneOffset !== null ? laneOffset : LANE_OFFSETS[this.nextId % LANE_OFFSETS.length];
+      const [px, py] = this.entityPos(progress, lane);
       const e = {
         id: this.nextId++,
         tpl,
@@ -554,6 +555,8 @@
         armorCurrent: tpl.armor,
         progress,
         laneOffset: lane,
+        _px: px,
+        _py: py,
         slowTimer: 0, slowFactor: 0,
         stunTimer: 0,
         poisonTimer: 0, poisonDps: 0, poisonSource: null,
@@ -591,7 +594,7 @@
       if (enemy.hp <= 0 || raw <= 0) return 0;
       if (canEvade && enemy.tpl.evasion > 0 && Math.random() < enemy.tpl.evasion) {
         const [ex, ey] = this.entityPos(enemy.progress, enemy.laneOffset);
-        this.floatTexts.push({ x: ex + 0.5, y: ey, text: "DODGE", color: "#94a3b8", ttl: 0.45 });
+        this.emitFloat(ex + 0.5, ey, "DODGE", "#94a3b8", 0.45);
         return 0;
       }
       let bonus = 0;
@@ -645,7 +648,7 @@
             a.hitFlash = 0.2;
           }
         }
-        this.effects.push({ x: bx + 0.5, y: by + 0.5, r: 3.0, color: "#f97316", ttl: 0.35, maxTtl: 0.35 });
+        this.emitEffect(bx + 0.5, by + 0.5, 3.0, "#f97316", 0.35);
         this.log(`${boss.tpl.name}: INFERNO WAVE!`);
       } else if (ab === "shield") {
         boss.shield = Math.min(1400, boss.shield + 600);
@@ -656,7 +659,7 @@
       } else if (ab === "void") {
         boss.shield = Math.min(2200, boss.shield + 950);
         for (let i = 0; i < 2; i++) this.spawnEnemy("assassin", 1, Math.max(0, boss.progress - 0.5 * (i + 1)));
-        this.effects.push({ x: bx + 0.5, y: by + 0.5, r: 2.8, color: "#c084fc", ttl: 0.4, maxTtl: 0.4 });
+        this.emitEffect(bx + 0.5, by + 0.5, 2.8, "#c084fc", 0.4);
         this.log(`${boss.tpl.name}: VOID RIFT!`);
       }
     }
@@ -690,12 +693,27 @@
       const steps = Math.max(1, Math.ceil(simDt / 0.05));
       const stepDt = simDt / steps;
       for (let i = 0; i < steps; i++) {
-        this.step(stepDt);
+        this.step(stepDt, i === steps - 1);
         if (this.gameOver) break;
       }
     }
 
-    step(dt) {
+    emitShot(x0, y0, x1, y1, rarity, kind) {
+      if (this.shots.length >= 65) return;
+      this.shots.push({ x0, y0, x1, y1, rarity, kind, ttl: 0.14, maxTtl: 0.14 });
+    }
+
+    emitEffect(x, y, r, color, ttl = 0.22) {
+      if (this.effects.length >= 22) return;
+      this.effects.push({ x, y, r, color, ttl, maxTtl: ttl });
+    }
+
+    emitFloat(x, y, text, color, ttl = 0.7) {
+      if (this.floatTexts.length >= 24) return;
+      this.floatTexts.push({ x, y, text, color, ttl });
+    }
+
+    step(dt, emitVisuals = true) {
       if (this.spawnQueue.length > 0) {
         this.spawnTimer -= dt;
         while (this.spawnQueue.length > 0 && this.spawnTimer <= 0) {
@@ -714,22 +732,27 @@
             t.incomeTimer += st.income_interval;
             this.gold += st.income_per_tick;
             t.goldEarned += st.income_per_tick;
-            this.floatTexts.push({ x: t.x + 0.5, y: t.y, text: `+$${st.income_per_tick}`, color: "#fbbf24", ttl: 0.7 });
+            this.emitFloat(t.x + 0.5, t.y, `+$${st.income_per_tick}`, "#fbbf24", 0.7);
           }
         }
         if (st.heal_allies_per_sec > 0 && this.allies.length > 0) {
           const effR = st.range * t.buffRng;
+          const effRSq = effR * effR;
           for (const a of this.allies) {
             if (a.hp <= 0 || a.hp >= a.maxHp) continue;
             const [ax, ay] = this.entityPos(a.progress, a.laneOffset);
-            if (Math.hypot(ax - t.x, ay - t.y) <= effR) {
+            const dx = ax - t.x, dy = ay - t.y;
+            if (dx * dx + dy * dy <= effRSq) {
               a.hp = Math.min(a.maxHp, a.hp + st.heal_allies_per_sec * dt);
             }
           }
         }
         if (st.spawn_ally_kind && st.spawn_interval > 0) {
           const tKey = `${t.x},${t.y}`;
-          const owned = this.allies.filter((a) => a.ownerKey === tKey && a.hp > 0).length;
+          let owned = 0;
+          for (const a of this.allies) {
+            if (a.ownerKey === tKey && a.hp > 0) owned++;
+          }
           if (owned < st.max_active_allies) {
             t.spawnTimer -= dt;
             if (t.spawnTimer <= 0) {
@@ -741,11 +764,14 @@
         if (st.spike_damage > 0 && st.spike_charges > 0) {
           t.cooldownLeft = Math.max(0, t.cooldownLeft - dt);
           if (t.cooldownLeft <= 0) {
-            const effR = st.range * t.buffRng;
+            const effRSq = (st.range * t.buffRng) ** 2;
             const avail = [];
             for (const rc of this.mapDef.road_cells) {
               const rk = `${rc[0]},${rc[1]}`;
-              if (!this.spikes.has(rk) && Math.hypot(rc[0] - t.x, rc[1] - t.y) <= effR) avail.push(rc);
+              if (!this.spikes.has(rk)) {
+                const dx = rc[0] - t.x, dy = rc[1] - t.y;
+                if (dx * dx + dy * dy <= effRSq) avail.push(rc);
+              }
             }
             if (avail.length > 0) {
               const pick = avail[Math.floor(Math.random() * avail.length)];
@@ -762,34 +788,47 @@
         }
       }
 
+      // Precompute enemy positions once per sub-step
+      for (const e of this.enemies) {
+        e.engaged = false;
+        const [px, py] = this.entityPos(e.progress, e.laneOffset);
+        e._px = px;
+        e._py = py;
+      }
+
       // Enemy heal auras
       for (const h of this.enemies) {
         if (h.hp <= 0 || h.tpl.heal_aura_per_sec <= 0) continue;
-        const [hx, hy] = this.entityPos(h.progress, h.laneOffset);
+        const rSq = h.tpl.heal_aura_radius * h.tpl.heal_aura_radius;
         for (const a of this.enemies) {
           if (a.hp <= 0 || a.hp >= a.maxHp) continue;
-          const [ax, ay] = this.entityPos(a.progress, a.laneOffset);
-          if (Math.hypot(ax - hx, ay - hy) <= h.tpl.heal_aura_radius) {
+          const dx = a._px - h._px, dy = a._py - h._py;
+          if (dx * dx + dy * dy <= rSq) {
             a.hp = Math.min(a.maxHp, a.hp + h.tpl.heal_aura_per_sec * dt);
           }
         }
       }
 
       // Friendly AllyUnits vs Enemies
-      for (const e of this.enemies) e.engaged = false;
       for (const a of this.allies) {
         if (a.hp <= 0) continue;
         a.hitFlash = Math.max(0, a.hitFlash - dt);
         a.reviveFlash = Math.max(0, a.reviveFlash - dt);
-        const nearby = this.enemies.filter((e) => e.hp > 0 && Math.abs(e.progress - a.progress) <= 0.95);
-        if (nearby.length > 0) {
-          const tgt = nearby.reduce((best, cur) => (cur.progress > best.progress ? cur : best), nearby[0]);
+        let tgt = null;
+        for (const e of this.enemies) {
+          if (e.hp > 0 && Math.abs(e.progress - a.progress) <= 0.95) {
+            if (!tgt || e.progress > tgt.progress) tgt = e;
+          }
+        }
+        if (tgt) {
           tgt.engaged = true;
           const [ax, ay] = this.entityPos(a.progress, a.laneOffset);
           if (a.tpl.splash_radius > 0) {
-            for (const e of nearby) {
-              const [ex, ey] = this.entityPos(e.progress, e.laneOffset);
-              if (Math.hypot(ex - ax, ey - ay) <= a.tpl.splash_radius) {
+            const srSq = a.tpl.splash_radius * a.tpl.splash_radius;
+            for (const e of this.enemies) {
+              if (e.hp <= 0 || Math.abs(e.progress - a.progress) > 0.95) continue;
+              const dx = e._px - ax, dy = e._py - ay;
+              if (dx * dx + dy * dy <= srSq) {
                 this.applyDamage(e, a.tpl.atk_dps * dt, null, 0.35);
               }
             }
@@ -804,13 +843,13 @@
             a.reviveFlash = 0.7;
             for (const e of this.enemies) {
               if (e.hp <= 0) continue;
-              const [ex, ey] = this.entityPos(e.progress, e.laneOffset);
-              if (Math.hypot(ex - ax, ey - ay) <= 2.4) {
+              const dx = e._px - ax, dy = e._py - ay;
+              if (dx * dx + dy * dy <= 5.76) {
                 this.applyDamage(e, a.tpl.revive_blast_dmg, null, 0, true);
               }
             }
-            this.effects.push({ x: ax + 0.5, y: ay + 0.5, r: 2.5, color: "#fbbf24", ttl: 0.4, maxTtl: 0.4 });
-            this.floatTexts.push({ x: ax + 0.5, y: ay, text: "2ND LIFE!", color: "#fbbf24", ttl: 0.9 });
+            this.emitEffect(ax + 0.5, ay + 0.5, 2.5, "#fbbf24", 0.4);
+            this.emitFloat(ax + 0.5, ay, "2ND LIFE!", "#fbbf24", 0.9);
             this.log(`${a.tpl.name} triggered SECOND LIFE!`);
             if (window.TDAudio) window.TDAudio.playRevive();
           }
@@ -853,10 +892,11 @@
           let spd = e.speed * (1 - e.slowFactor);
           if (e.tpl.berserk_threshold > 0 && e.hp / e.maxHp <= e.tpl.berserk_threshold) spd *= 1.6;
           if (e.surgeTimer > 0) spd *= 1.65;
-          const [px0, py0] = this.entityPos(e.progress, e.laneOffset);
+          const ck0 = `${Math.round(e._px)},${Math.round(e._py)}`;
           e.progress += spd * dt;
           const [px1, py1] = this.entityPos(e.progress, e.laneOffset);
-          const ck0 = `${Math.round(px0)},${Math.round(py0)}`;
+          e._px = px1;
+          e._py = py1;
           const ck1 = `${Math.round(px1)},${Math.round(py1)}`;
           if (ck1 !== ck0 && this.spikes.has(ck1)) {
             const sp = this.spikes.get(ck1);
@@ -887,7 +927,7 @@
         }
       }
 
-      // Towers fire
+      // Towers fire (zero-allocation targeting + capped visuals)
       for (const t of this.towers.values()) {
         const st = this.towerStats(t);
         if (st.damage <= 0 || st.spike_damage > 0) continue;
@@ -895,39 +935,35 @@
         if (t.cooldownLeft > 0 || this.enemies.length === 0) continue;
 
         const effR = st.range * t.buffRng;
-        const inRange = [];
+        const effRSq = effR * effR;
+        const minRSq = st.min_range * st.min_range;
+        let target = null;
+        let bestMetric = t.targetMode === "closest" ? 1e12 : -1;
+
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
-          const [ex, ey] = this.entityPos(e.progress, e.laneOffset);
-          const dist = Math.hypot(ex - t.x, ey - t.y);
-          if (dist >= st.min_range && dist <= effR) inRange.push({ dist, e, ex, ey });
+          const dx = e._px - t.x, dy = e._py - t.y;
+          const dSq = dx * dx + dy * dy;
+          if (dSq < minRSq || dSq > effRSq) continue;
+          if (t.targetMode === "strongest") {
+            const val = e.hp + e.shield;
+            if (val > bestMetric) { bestMetric = val; target = e; }
+          } else if (t.targetMode === "closest") {
+            if (dSq < bestMetric) { bestMetric = dSq; target = e; }
+          } else {
+            if (e.progress > bestMetric) { bestMetric = e.progress; target = e; }
+          }
         }
-        if (inRange.length === 0) continue;
+        if (!target) continue;
 
-        let pick;
-        if (t.targetMode === "strongest") {
-          pick = inRange.reduce((a, b) => (b.e.hp + b.e.shield > a.e.hp + a.e.shield ? b : a));
-        } else if (t.targetMode === "closest") {
-          pick = inRange.reduce((a, b) => (b.dist < a.dist ? b : a));
-        } else {
-          pick = inRange.reduce((a, b) => (b.e.progress > a.e.progress ? b : a));
-        }
-
-        const target = pick.e;
-        t.angle = Math.atan2(pick.ey - t.y, pick.ex - t.x);
+        const tx = target._px, ty = target._py;
+        t.angle = Math.atan2(ty - t.y, tx - t.x);
         t.cooldownLeft = st.cooldown / Math.max(0.5, t.buffSpd);
 
-        this.shots.push({
-          x0: t.x + 0.5,
-          y0: t.y + 0.5,
-          x1: pick.ex + 0.5,
-          y1: pick.ey + 0.5,
-          rarity: D.TOWERS[t.kind].rarity,
-          kind: t.kind,
-          ttl: 0.14,
-          maxTtl: 0.14,
-        });
-        if (window.TDAudio && Math.random() < 0.35) window.TDAudio.playShoot(t.kind);
+        if (emitVisuals) {
+          this.emitShot(t.x + 0.5, t.y + 0.5, tx + 0.5, ty + 0.5, D.TOWERS[t.kind].rarity, t.kind);
+          if (window.TDAudio && Math.random() < 0.28) window.TDAudio.playShoot(t.kind);
+        }
 
         const effDmg = st.damage * t.buffDmg;
         const dealt = this.applyDamage(
@@ -953,19 +989,15 @@
         }
 
         if (st.splash_radius > 0) {
-          this.effects.push({
-            x: pick.ex + 0.5,
-            y: pick.ey + 0.5,
-            r: st.splash_radius,
-            color: st.slow_factor > 0 ? "#38bdf8" : "#f97316",
-            ttl: 0.22,
-            maxTtl: 0.22,
-          });
+          if (emitVisuals) {
+            this.emitEffect(tx + 0.5, ty + 0.5, st.splash_radius, st.slow_factor > 0 ? "#38bdf8" : "#f97316", 0.22);
+          }
+          const srSq = st.splash_radius * st.splash_radius;
           const sDmg = effDmg * st.splash_ratio;
           for (const other of this.enemies) {
             if (other.id === target.id || other.hp <= 0) continue;
-            const [ox, oy] = this.entityPos(other.progress, other.laneOffset);
-            if (Math.hypot(ox - pick.ex, oy - pick.ey) <= st.splash_radius) {
+            const dx = other._px - tx, dy = other._py - ty;
+            if (dx * dx + dy * dy <= srSq) {
               const sd = this.applyDamage(other, sDmg, t, st.armor_pierce, false, false, st.execute_pct);
               if (sd > 0 && st.armor_shred > 0 && other.hp > 0) {
                 other.armorCurrent = Math.max(0, other.armorCurrent - st.armor_shred);
@@ -985,29 +1017,28 @@
 
         if (st.chain_count > 1) {
           const hitIds = new Set([target.id]);
-          let cx = pick.ex, cy = pick.ey;
+          let cx = tx, cy = ty;
           let cdmg = effDmg * st.chain_falloff;
           for (let c = 1; c < st.chain_count; c++) {
-            let bestN = null, bestD = 999, bx = 0, by = 0;
+            let bestN = null, bestDSq = 14.44; // 3.8^2
             for (const cand of this.enemies) {
               if (cand.hp <= 0 || hitIds.has(cand.id)) continue;
-              const [nx, ny] = this.entityPos(cand.progress, cand.laneOffset);
-              const d = Math.hypot(nx - cx, ny - cy);
-              if (d <= 3.8 && d < bestD) {
-                bestD = d; bestN = cand; bx = nx; by = ny;
+              const dx = cand._px - cx, dy = cand._py - cy;
+              const dSq = dx * dx + dy * dy;
+              if (dSq <= bestDSq) {
+                bestDSq = dSq; bestN = cand;
               }
             }
             if (!bestN) break;
             hitIds.add(bestN.id);
-            this.shots.push({
-              x0: cx + 0.5, y0: cy + 0.5, x1: bx + 0.5, y1: by + 0.5,
-              rarity: D.TOWERS[t.kind].rarity, kind: t.kind, ttl: 0.14, maxTtl: 0.14,
-            });
+            if (emitVisuals) {
+              this.emitShot(cx + 0.5, cy + 0.5, bestN._px + 0.5, bestN._py + 0.5, D.TOWERS[t.kind].rarity, t.kind);
+            }
             this.applyDamage(bestN, cdmg, t, st.armor_pierce, false, false, st.execute_pct);
             if (st.stun_duration > 0 && bestN.hp > 0 && !bestN.tpl.is_boss) {
               bestN.stunTimer = Math.max(bestN.stunTimer, st.stun_duration * 0.7);
             }
-            cx = bx; cy = by; cdmg *= st.chain_falloff;
+            cx = bestN._px; cy = bestN._py; cdmg *= st.chain_falloff;
           }
         }
       }

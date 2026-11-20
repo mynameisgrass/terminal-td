@@ -11,6 +11,9 @@
   let currentTab = "lobby";
   let battle = null;
   let hoverCell = null;
+  let pendingBuild = null;
+  let confirmMode = true; // Mindustry-style tap-to-preview + confirm by default!
+  let dockButtons = [];
   let lastFrame = performance.now();
   let modalMode = null; // null, "tavern", "end"
   let tavernBet = 50;
@@ -253,25 +256,36 @@
   }
 
   // ========== BATTLE UI ==========
-  function renderBattleDock() {
+  function buildBattleDock() {
     if (!battle) return;
     const dock = $("battle-dock");
     dock.innerHTML = "";
+    dockButtons = [];
     for (const k of battle.loadout) {
       const bp = D.TOWERS[k];
       const cost = bp.levels[0].cost;
       const btn = document.createElement("button");
-      btn.className = `dock-unit rar-${bp.rarity} ${battle.selectedTowerKind === k ? "selected" : ""}`;
-      btn.style.opacity = battle.gold >= cost ? "1" : "0.55";
+      btn.className = `dock-unit rar-${bp.rarity}`;
       btn.innerHTML = `
         <div style="font-weight:800;font-size:12px;">[${bp.symbol}] ${bp.name}</div>
         <div class="subtext">$${cost} · ${bp.role.split(" ")[0]}</div>
       `;
       btn.onclick = () => {
         battle.selectedTowerKind = k;
-        renderBattleDock();
+        syncBattleDock();
+        renderBattleHUD();
       };
       dock.appendChild(btn);
+      dockButtons.push({ kind: k, cost, btn });
+    }
+    syncBattleDock();
+  }
+
+  function syncBattleDock() {
+    if (!battle) return;
+    for (const item of dockButtons) {
+      item.btn.classList.toggle("selected", battle.selectedTowerKind === item.kind);
+      item.btn.style.opacity = battle.gold >= item.cost ? "1" : "0.52";
     }
   }
 
@@ -285,6 +299,8 @@
     $("btn-speed").textContent = `${battle.speedMult}x`;
     $("btn-autowave").textContent = `Auto: ${battle.autoStart ? "ON" : "OFF"}`;
     $("btn-autowave").className = `btn sm ${battle.autoStart ? "good" : ""}`;
+    $("btn-confirm-mode").textContent = confirmMode ? "Place: Confirm" : "Place: 1-Tap";
+    $("btn-confirm-mode").className = `btn sm ${confirmMode ? "good" : ""}`;
     $("btn-pause").textContent = battle.paused ? "Resume" : "Pause";
 
     if (battle.waveActive) {
@@ -313,6 +329,21 @@
     const logEl = $("battle-log-line");
     if (logEl && battle.logs.length > 0) {
       logEl.textContent = `> ${battle.logs[battle.logs.length - 1]}`;
+    }
+
+    // Mindustry-style Confirm Build Bar
+    if (pendingBuild && battle.canBuildAt(pendingBuild.x, pendingBuild.y) && battle.selectedTowerKind) {
+      const bp = D.TOWERS[battle.selectedTowerKind];
+      const st = bp.levels[0];
+      const afford = battle.gold >= st.cost;
+      $("confirm-build-bar").classList.add("show");
+      $("conf-title").textContent = `[${bp.symbol}] ${bp.name} @ (${pendingBuild.x},${pendingBuild.y})`;
+      $("conf-stats").textContent = `$${st.cost} | DMG:${st.damage} RNG:${st.range} CD:${st.cooldown}s (Tap tile again or [BUILD])`;
+      $("btn-conf-build").textContent = afford ? `[BUILD $${st.cost}]` : `[NEED $${st.cost}]`;
+      $("btn-conf-build").className = `btn sm ${afford ? "good" : "bad"}`;
+    } else {
+      pendingBuild = null;
+      $("confirm-build-bar").classList.remove("show");
     }
 
     // Selected Tower Inspector
@@ -480,21 +511,27 @@
 
   $("btn-start-battle").onclick = () => {
     battle = new E.GameBattle(selectedMapIdx, selectedDiff, profile);
+    pendingBuild = null;
     modalMode = null;
     $("modal-backdrop").classList.remove("show");
     switchTab("battle");
-    renderBattleDock();
+    buildBattleDock();
     renderBattleHUD();
   };
 
   $("btn-wave").onclick = () => {
-    if (battle) { battle.startNextWave(); renderBattleHUD(); renderBattleDock(); }
+    if (battle) { battle.startNextWave(); renderBattleHUD(); syncBattleDock(); }
   };
   $("btn-autowave").onclick = () => {
     if (battle) { battle.toggleAutoStart(); renderBattleHUD(); }
   };
   $("btn-speed").onclick = () => {
     if (battle) { battle.cycleSpeed(); renderBattleHUD(); }
+  };
+  $("btn-confirm-mode").onclick = () => {
+    confirmMode = !confirmMode;
+    if (!confirmMode) pendingBuild = null;
+    renderBattleHUD();
   };
   $("btn-pause").onclick = () => {
     if (battle) { battle.paused = !battle.paused; renderBattleHUD(); }
@@ -504,16 +541,32 @@
   };
   $("btn-exit-battle").onclick = () => {
     battle = null;
+    pendingBuild = null;
     modalMode = null;
     $("modal-backdrop").classList.remove("show");
     switchTab("lobby");
+  };
+
+  function confirmBuildAtPending() {
+    if (!battle || !pendingBuild) return;
+    if (battle.buildTower(pendingBuild.x, pendingBuild.y, battle.selectedTowerKind)) {
+      pendingBuild = null;
+      syncBattleDock();
+    }
+    renderBattleHUD();
+  }
+
+  $("btn-conf-build").onclick = confirmBuildAtPending;
+  $("btn-conf-cancel").onclick = () => {
+    pendingBuild = null;
+    renderBattleHUD();
   };
 
   $("btn-insp-upgr").onclick = () => {
     if (battle && battle.selectedCell) {
       battle.upgradeTower(battle.selectedCell.x, battle.selectedCell.y);
       renderBattleHUD();
-      renderBattleDock();
+      syncBattleDock();
     }
   };
   $("btn-insp-tgt").onclick = () => {
@@ -526,7 +579,7 @@
     if (battle && battle.selectedCell) {
       battle.sellTower(battle.selectedCell.x, battle.selectedCell.y);
       renderBattleHUD();
-      renderBattleDock();
+      syncBattleDock();
     }
   };
   $("btn-insp-close").onclick = () => {
@@ -544,14 +597,26 @@
     if (!cell) return;
     const key = `${cell.x},${cell.y}`;
     if (battle.towers.has(key)) {
+      pendingBuild = null;
       battle.selectedCell = cell;
     } else if (battle.canBuildAt(cell.x, cell.y)) {
-      if (battle.buildTower(cell.x, cell.y, battle.selectedTowerKind)) {
-        renderBattleDock();
+      if (confirmMode) {
+        if (pendingBuild && pendingBuild.x === cell.x && pendingBuild.y === cell.y) {
+          confirmBuildAtPending();
+          return;
+        }
+        battle.selectedCell = null;
+        pendingBuild = cell;
+        if (window.TDAudio) window.TDAudio.haptic("light");
       } else {
-        battle.selectedCell = cell;
+        if (battle.buildTower(cell.x, cell.y, battle.selectedTowerKind)) {
+          syncBattleDock();
+        } else {
+          battle.selectedCell = cell;
+        }
       }
     } else {
+      pendingBuild = null;
       battle.selectedCell = null;
     }
     renderBattleHUD();
@@ -564,12 +629,12 @@
     lastFrame = now;
     if (currentTab === "battle" && battle) {
       battle.tick(dt, modalMode === "tavern");
-      R.drawBattle(canvas, battle, hoverCell);
+      R.drawBattle(canvas, battle, hoverCell, pendingBuild);
       hudTick += dt;
-      if (hudTick >= 0.12) {
+      if (hudTick >= 0.14) {
         hudTick = 0;
         renderBattleHUD();
-        renderBattleDock();
+        syncBattleDock();
       }
     }
     requestAnimationFrame(loop);

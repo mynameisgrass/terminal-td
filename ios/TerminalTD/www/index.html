@@ -99,6 +99,7 @@
           <button class="btn sm good" id="btn-wave">Wave 1</button>
           <button class="btn sm" id="btn-autowave">Auto: OFF</button>
           <button class="btn sm primary" id="btn-speed">1x</button>
+          <button class="btn sm good" id="btn-confirm-mode">Place: Confirm</button>
           <button class="btn sm" id="btn-pause">Pause</button>
           <button class="btn sm gold" id="btn-tavern">Tavern</button>
           <button class="btn sm bad" id="btn-exit-battle">Lobby</button>
@@ -116,6 +117,17 @@
       </div>
 
       <div id="battle-log-line" class="subtext" style="padding:2px 8px;background:#08110e;border-top:1px solid #1e4d3a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">&gt; Ready.</div>
+
+      <div class="inspector-bar" id="confirm-build-bar">
+        <div>
+          <strong id="conf-title" style="color:#4ade80;">Confirm Build</strong>
+          <span class="subtext" id="conf-stats"></span>
+        </div>
+        <div class="pill-row">
+          <button class="btn sm good" id="btn-conf-build">[BUILD]</button>
+          <button class="btn sm bad" id="btn-conf-cancel">[CANCEL]</button>
+        </div>
+      </div>
 
       <div class="inspector-bar" id="inspector-bar">
         <div>

@@ -1,4 +1,4 @@
-// 60 FPS Retro-Terminal ASCII Grid Canvas Renderer (iOS 14+ & Web)
+// High-Performance 60 FPS ASCII Grid Canvas Renderer with Static Offscreen Layer Cache
 (function () {
   const D = window.TD_DATA;
   const RARITY_COLOR = {
@@ -9,6 +9,9 @@
     mythic: "#f87171",
     transcendent: "#2dd4bf",
   };
+
+  let staticCanvas = null;
+  let staticKey = "";
 
   function asciiBar(hp, maxHp, width) {
     if (maxHp <= 0) return "[" + ".".repeat(width) + "]";
@@ -25,7 +28,63 @@
     return ".";
   }
 
-  function drawBattle(canvas, battle, hoverCell) {
+  function ensureStaticLayer(battle, W, H, dpr, tile, ox, oy) {
+    const key = `${battle.mapDef.key}|${W}|${H}|${dpr}|${tile}`;
+    if (staticCanvas && staticKey === key) return staticCanvas;
+
+    if (!staticCanvas) staticCanvas = document.createElement("canvas");
+    staticCanvas.width = Math.floor(W * dpr);
+    staticCanvas.height = Math.floor(H * dpr);
+    staticKey = key;
+
+    const sctx = staticCanvas.getContext("2d");
+    sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    sctx.fillStyle = "#040907";
+    sctx.fillRect(0, 0, W, H);
+
+    sctx.strokeStyle = "#1e4d3a";
+    sctx.lineWidth = 1;
+    sctx.strokeRect(ox - 1, oy - 1, tile * battle.width + 2, tile * battle.height + 2);
+
+    sctx.font = `bold ${Math.max(8, Math.floor(tile * 0.54))}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
+    sctx.textAlign = "center";
+    sctx.textBaseline = "middle";
+
+    for (let y = 0; y < battle.height; y++) {
+      for (let x = 0; x < battle.width; x++) {
+        const ck = `${x},${y}`;
+        const px = ox + x * tile;
+        const py = oy + y * tile;
+        const cx = px + tile / 2;
+        const cy = py + tile / 2;
+
+        if (battle.spawnSet.has(ck)) {
+          sctx.fillStyle = "#220a33";
+          sctx.fillRect(px, py, tile, tile);
+          sctx.fillStyle = "#e879f9";
+          sctx.fillText("S>", cx, cy);
+        } else if (battle.baseSet.has(ck)) {
+          sctx.fillStyle = "#082917";
+          sctx.fillRect(px, py, tile, tile);
+          sctx.fillStyle = "#4ade80";
+          sctx.fillText("<>", cx, cy);
+        } else if (battle.roadSet.has(ck)) {
+          sctx.fillStyle = "#1c170f";
+          sctx.fillRect(px, py, tile, tile);
+          sctx.fillStyle = "#85642d";
+          sctx.fillText("::", cx, cy);
+        } else {
+          sctx.fillStyle = (x + y) % 2 === 0 ? "#06100c" : "#050d0a";
+          sctx.fillRect(px, py, tile, tile);
+          sctx.fillStyle = "#1b4332";
+          sctx.fillText(".", cx, cy);
+        }
+      }
+    }
+    return staticCanvas;
+  }
+
+  function drawBattle(canvas, battle, hoverCell, pendingBuild) {
     if (!canvas || !battle) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const rect = canvas.getBoundingClientRect();
@@ -39,106 +98,87 @@
     }
 
     const ctx = canvas.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
     const W = rect.width;
     const H = rect.height;
-    const tileW = Math.floor(W / battle.width);
-    const tileH = Math.floor(H / battle.height);
-    const tile = Math.max(8, Math.min(tileW, tileH));
+    const tile = Math.max(8, Math.min(Math.floor(W / battle.width), Math.floor(H / battle.height)));
     const ox = Math.floor((W - tile * battle.width) / 2);
     const oy = Math.floor((H - tile * battle.height) / 2);
 
-    ctx.fillStyle = "#040907";
-    ctx.fillRect(0, 0, W, H);
-
-    // Outer ASCII frame around the 36x18 grid
-    ctx.strokeStyle = "#1e4d3a";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(ox - 1, oy - 1, tile * battle.width + 2, tile * battle.height + 2);
-
-    const focus = battle.selectedCell || hoverCell;
-    let rangeR = 0, rangeMinR = 0, rangeCol = "#38bdf8";
-    if (focus) {
-      const ft = battle.towers.get(`${focus.x},${focus.y}`);
-      if (ft) {
-        const st = battle.towerStats(ft);
-        rangeR = st.range * ft.buffRng;
-        rangeMinR = st.min_range;
-        rangeCol = RARITY_COLOR[D.TOWERS[ft.kind].rarity] || "#38bdf8";
-      } else if (battle.canBuildAt(focus.x, focus.y) && battle.selectedTowerKind) {
-        const st = D.TOWERS[battle.selectedTowerKind].levels[0];
-        rangeR = st.range;
-        rangeMinR = st.min_range;
-        rangeCol = RARITY_COLOR[D.TOWERS[battle.selectedTowerKind].rarity] || "#38bdf8";
-      }
-    }
+    // 1. Blit pre-rendered static map in 1 single drawImage call
+    const bg = ensureStaticLayer(battle, W, H, dpr, tile, ox, oy);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(bg, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const monoFont = `bold ${Math.max(8, Math.floor(tile * 0.56))}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
     const smallFont = `bold ${Math.max(7, Math.floor(tile * 0.40))}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
-    ctx.font = monoFont;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
-    // 1. Grid Tiles (Grass, 2-Lane Road, Spawn, HQ, Range '+')
-    for (let y = 0; y < battle.height; y++) {
-      for (let x = 0; x < battle.width; x++) {
-        const key = `${x},${y}`;
-        const px = ox + x * tile;
-        const py = oy + y * tile;
-        const cx = px + tile / 2;
-        const cy = py + tile / 2;
-
-        const inRange =
-          focus && rangeR > 0 && (() => {
-            const d = Math.hypot(x - focus.x, y - focus.y);
-            return d >= rangeMinR && d <= rangeR;
-          })();
-
-        if (battle.spawnSet.has(key)) {
-          ctx.fillStyle = "#220a33";
-          ctx.fillRect(px, py, tile, tile);
-          ctx.fillStyle = "#e879f9";
-          ctx.fillText("S>", cx, cy);
-        } else if (battle.baseSet.has(key)) {
-          ctx.fillStyle = "#082917";
-          ctx.fillRect(px, py, tile, tile);
-          ctx.fillStyle = "#4ade80";
-          ctx.fillText("<>", cx, cy);
-        } else if (battle.roadSet.has(key)) {
-          ctx.fillStyle = inRange ? "#2e2412" : "#1c170f";
-          ctx.fillRect(px, py, tile, tile);
-          ctx.fillStyle = inRange ? "#fbbf24" : "#85642d";
-          ctx.fillText("::", cx, cy);
-        } else {
-          ctx.fillStyle = inRange ? "#0a1f2b" : ((x + y) % 2 === 0 ? "#06100c" : "#050d0a");
-          ctx.fillRect(px, py, tile, tile);
-          if (inRange) {
-            ctx.fillStyle = rangeCol;
-            ctx.fillText("+", cx, cy);
-          } else {
-            ctx.fillStyle = "#1b4332";
-            ctx.fillText(".", cx, cy);
+    // 2. Range '+' overlay (only bounding box around focused tile!)
+    const focus = pendingBuild || battle.selectedCell || hoverCell;
+    if (focus) {
+      const ft = battle.towers.get(`${focus.x},${focus.y}`);
+      let r = 0, minR = 0, col = "#38bdf8";
+      if (ft) {
+        const st = battle.towerStats(ft);
+        r = st.range * ft.buffRng;
+        minR = st.min_range;
+        col = RARITY_COLOR[D.TOWERS[ft.kind].rarity] || "#38bdf8";
+      } else if (battle.canBuildAt(focus.x, focus.y) && battle.selectedTowerKind) {
+        const st = D.TOWERS[battle.selectedTowerKind].levels[0];
+        r = st.range;
+        minR = st.min_range;
+        col = RARITY_COLOR[D.TOWERS[battle.selectedTowerKind].rarity] || "#38bdf8";
+      }
+      if (r > 0) {
+        const ceilR = Math.ceil(r);
+        const rSq = r * r;
+        const minRSq = minR * minR;
+        const x0 = Math.max(0, focus.x - ceilR);
+        const x1 = Math.min(battle.width - 1, focus.x + ceilR);
+        const y0 = Math.max(0, focus.y - ceilR);
+        const y1 = Math.min(battle.height - 1, focus.y + ceilR);
+        ctx.font = monoFont;
+        for (let y = y0; y <= y1; y++) {
+          for (let x = x0; x <= x1; x++) {
+            const dx = x - focus.x, dy = y - focus.y;
+            const dSq = dx * dx + dy * dy;
+            if (dSq < minRSq || dSq > rSq) continue;
+            const ck = `${x},${y}`;
+            const px = ox + x * tile;
+            const py = oy + y * tile;
+            if (battle.roadSet.has(ck)) {
+              ctx.fillStyle = "#2e2412";
+              ctx.fillRect(px, py, tile, tile);
+              ctx.fillStyle = "#fbbf24";
+              ctx.fillText("::", px + tile / 2, py + tile / 2);
+            } else if (!battle.towers.has(ck)) {
+              ctx.fillStyle = "#0a1f2b";
+              ctx.fillRect(px, py, tile, tile);
+              ctx.fillStyle = col;
+              ctx.fillText("+", px + tile / 2, py + tile / 2);
+            }
           }
         }
       }
     }
 
-    // 2. Road Spikes (ASCII 'xx')
+    // 3. Road Spikes
     ctx.font = smallFont;
-    for (const sp of battle.spikes.values()) {
+    if (battle.spikes.size > 0) {
       ctx.fillStyle = "#fbbf24";
-      ctx.fillText("xx", ox + (sp.x + 0.5) * tile, oy + (sp.y + 0.5) * tile);
+      for (const sp of battle.spikes.values()) {
+        ctx.fillText("xx", ox + (sp.x + 0.5) * tile, oy + (sp.y + 0.5) * tile);
+      }
     }
 
-    // 3. Towers ([A1], [$3], etc.)
+    // 4. Towers
     for (const t of battle.towers.values()) {
       const bp = D.TOWERS[t.kind];
       const rCol = RARITY_COLOR[bp.rarity] || "#d1d5db";
       const px = ox + t.x * tile;
       const py = oy + t.y * tile;
-      const cx = px + tile / 2;
-      const cy = py + tile / 2;
 
       ctx.fillStyle = "#081410";
       ctx.fillRect(px + 1, py + 1, tile - 2, tile - 2);
@@ -147,8 +187,7 @@
       ctx.strokeRect(px + 1, py + 1, tile - 2, tile - 2);
 
       ctx.fillStyle = rCol;
-      ctx.font = smallFont;
-      ctx.fillText(`${bp.symbol}${t.level}`, cx, cy);
+      ctx.fillText(`${bp.symbol}${t.level}`, px + tile / 2, py + tile / 2);
 
       if (t.buffDmg > 1 || t.buffSpd > 1 || t.buffRng > 1) {
         ctx.fillStyle = "#4ade80";
@@ -156,29 +195,42 @@
       }
     }
 
-    // 4. Friendly Road Units (^P, ^W, ^*)
+    // 5. Pending Ghost Blueprint (Mindustry-style click-and-confirm preview!)
+    if (pendingBuild && battle.selectedTowerKind && battle.canBuildAt(pendingBuild.x, pendingBuild.y)) {
+      const bp = D.TOWERS[battle.selectedTowerKind];
+      const canAfford = battle.gold >= bp.levels[0].cost;
+      const px = ox + pendingBuild.x * tile;
+      const py = oy + pendingBuild.y * tile;
+      ctx.fillStyle = canAfford ? "rgba(74, 222, 128, 0.22)" : "rgba(248, 113, 113, 0.22)";
+      ctx.fillRect(px + 1, py + 1, tile - 2, tile - 2);
+      ctx.strokeStyle = canAfford ? "#4ade80" : "#f87171";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(px + 1, py + 1, tile - 2, tile - 2);
+      ctx.fillStyle = canAfford ? "#4ade80" : "#f87171";
+      ctx.fillText(`${bp.symbol}?`, px + tile / 2, py + tile / 2);
+    } else if (focus) {
+      ctx.strokeStyle = "#4ade80";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(ox + focus.x * tile + 0.5, oy + focus.y * tile + 0.5, tile - 1, tile - 1);
+    }
+
+    // 6. Friendly Road Units
     for (const a of battle.allies) {
       const [ax, ay] = battle.entityPos(a.progress, a.laneOffset);
       const cx = ox + (ax + 0.5) * tile;
       const cy = oy + (ay + 0.5) * tile;
-      const col = a.reviveFlash > 0 ? "#fbbf24" : (a.hitFlash > 0 ? "#ffffff" : "#22d3ee");
-
       ctx.fillStyle = "rgba(4, 24, 30, 0.85)";
       ctx.fillRect(cx - tile * 0.42, cy - tile * 0.38, tile * 0.84, tile * 0.76);
-      ctx.fillStyle = col;
-      ctx.font = smallFont;
+      ctx.fillStyle = a.reviveFlash > 0 ? "#fbbf24" : (a.hitFlash > 0 ? "#ffffff" : "#22d3ee");
       ctx.fillText(`^${a.tpl.symbol}`, cx, cy);
-
-      // Micro ASCII HP indicator above ally
       ctx.fillStyle = a.revivesLeft > 0 ? "#fbbf24" : "#22d3ee";
       ctx.fillText(asciiBar(a.hp, a.maxHp, 3), cx, cy - tile * 0.48);
     }
 
-    // 5. Enemies & Bosses (ASCII glyph + ASCII HP bar)
+    // 7. Enemies & Bosses
     for (const e of battle.enemies) {
-      const [ex, ey] = battle.entityPos(e.progress, e.laneOffset);
-      const cx = ox + (ex + 0.5) * tile;
-      const cy = oy + (ey + 0.5) * tile;
+      const cx = ox + (e._px + 0.5) * tile;
+      const cy = oy + (e._py + 0.5) * tile;
 
       let col = "#f87171";
       if (e.hitFlash > 0) col = "#ffffff";
@@ -204,69 +256,47 @@
         ctx.fillStyle = "rgba(18, 6, 6, 0.85)";
         ctx.fillRect(cx - tile * 0.4, cy - tile * 0.35, tile * 0.8, tile * 0.7);
         ctx.fillStyle = col;
-        ctx.font = smallFont;
         ctx.fillText(`${e.tpl.symbol}${microHpChar(e.hp, e.maxHp)}`, cx, cy);
       }
 
       if (e.shield > 0) {
         ctx.fillStyle = "#38bdf8";
-        ctx.font = smallFont;
         ctx.fillText("[SH]", cx, cy + tile * 0.55);
       }
     }
 
-    // 6. ASCII Shot Trails (*, ^, ~, |, !)
+    // 8. Capped ASCII Shot Trails
     for (const s of battle.shots) {
       const char = (D.TOWERS[s.kind] && D.TOWERS[s.kind].shot_char) || "*";
-      const col = RARITY_COLOR[s.rarity] || "#fde047";
-      const dist = Math.hypot(s.x1 - s.x0, s.y1 - s.y0);
-      const count = Math.max(2, Math.min(8, Math.round(dist * 1.4)));
-      ctx.save();
       ctx.globalAlpha = Math.max(0.25, s.ttl / s.maxTtl);
-      ctx.fillStyle = col;
-      ctx.font = smallFont;
+      ctx.fillStyle = RARITY_COLOR[s.rarity] || "#fde047";
+      const dist = Math.hypot(s.x1 - s.x0, s.y1 - s.y0);
+      const count = Math.max(2, Math.min(6, Math.round(dist * 1.1)));
       for (let i = 1; i <= count; i++) {
         const t = i / count;
-        const sx = ox + (s.x0 + (s.x1 - s.x0) * t) * tile;
-        const sy = oy + (s.y0 + (s.y1 - s.y0) * t) * tile;
-        ctx.fillText(char, sx, sy);
+        ctx.fillText(char, ox + (s.x0 + (s.x1 - s.x0) * t) * tile, oy + (s.y0 + (s.y1 - s.y0) * t) * tile);
       }
-      ctx.restore();
     }
 
-    // 7. ASCII Explosion Bursts
+    // 9. Capped ASCII Explosion Bursts
     for (const ef of battle.effects) {
       const p = 1 - ef.ttl / ef.maxTtl;
       const rad = ef.r * tile * (0.35 + p * 0.65);
-      ctx.save();
       ctx.globalAlpha = Math.max(0, (1 - p) * 0.85);
       ctx.fillStyle = ef.color;
-      ctx.font = smallFont;
       for (let a = 0; a < 8; a++) {
         const ang = (a * Math.PI) / 4;
-        const ex = ox + ef.x * tile + Math.cos(ang) * rad;
-        const ey = oy + ef.y * tile + Math.sin(ang) * rad;
-        ctx.fillText(a % 2 === 0 ? "*" : "+", ex, ey);
+        ctx.fillText(a % 2 === 0 ? "*" : "+", ox + ef.x * tile + Math.cos(ang) * rad, oy + ef.y * tile + Math.sin(ang) * rad);
       }
-      ctx.restore();
     }
 
-    // 8. Cursor / Selected Tile Highlight
-    if (focus) {
-      ctx.strokeStyle = "#4ade80";
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(ox + focus.x * tile + 0.5, oy + focus.y * tile + 0.5, tile - 1, tile - 1);
-    }
-
-    // 9. Floating ASCII Combat Text
+    // 10. Floating Combat Text
     for (const ft of battle.floatTexts) {
-      ctx.save();
       ctx.globalAlpha = Math.min(1, ft.ttl * 2);
       ctx.fillStyle = ft.color;
-      ctx.font = smallFont;
       ctx.fillText(ft.text, ox + ft.x * tile, oy + ft.y * tile);
-      ctx.restore();
     }
+    ctx.globalAlpha = 1;
   }
 
   function canvasToGrid(canvas, battle, clientX, clientY) {
