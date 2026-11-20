@@ -105,8 +105,15 @@ def rarity_cp(rarity: str) -> int:
     }.get(rarity, CP_DEFAULT)
 
 
-def safe_addstr(win: curses.window, y: int, x: int, text: str, attr: int = 0) -> None:
-    max_y, max_x = win.getmaxyx()
+def safe_addstr(
+    win: curses.window,
+    y: int,
+    x: int,
+    text: str,
+    attr: int = 0,
+    bounds: Optional[Tuple[int, int]] = None,
+) -> None:
+    max_y, max_x = bounds if bounds is not None else win.getmaxyx()
     if y < 0 or y >= max_y or x >= max_x:
         return
     if x < 0:
@@ -690,12 +697,27 @@ def render_game(stdscr: curses.window, state: GameState, ui: UIState, has_colors
     range_cells = get_range_cells(state)
 
     cell_enemies: Dict[Tuple[int, int], List[Enemy]] = {}
+    road_set = state.road_set
     for enemy in state.enemies:
-        cell_enemies.setdefault(enemy.grid_cell(state.centerline, state.road_set), []).append(enemy)
+        if enemy._px or enemy._py:
+            cell = (int(round(enemy._px)), int(round(enemy._py)))
+            if cell not in road_set:
+                cell = enemy.grid_cell(state.centerline, road_set)
+        else:
+            cell = enemy.grid_cell(state.centerline, road_set)
+        cell_enemies.setdefault(cell, []).append(enemy)
 
     cell_allies: Dict[Tuple[int, int], List[AllyUnit]] = {}
     for ally in state.allies:
-        cell_allies.setdefault(ally.grid_cell(state.centerline, state.road_set), []).append(ally)
+        if ally._px or ally._py:
+            cell = (int(round(ally._px)), int(round(ally._py)))
+            if cell not in road_set:
+                cell = ally.grid_cell(state.centerline, road_set)
+        else:
+            cell = ally.grid_cell(state.centerline, road_set)
+        cell_allies.setdefault(cell, []).append(ally)
+
+    frame_bounds = (max_y, max_x)
 
     shot_cells: Dict[Tuple[int, int], Tuple[str, str]] = {}
     for shot in state.shots:
@@ -797,9 +819,9 @@ def render_game(stdscr: curses.window, state: GameState, ui: UIState, has_colors
             if is_cursor:
                 attr |= curses.A_REVERSE
 
-            safe_addstr(stdscr, py, px, row0, attr)
+            safe_addstr(stdscr, py, px, row0, attr, frame_bounds)
             if th >= 2:
-                safe_addstr(stdscr, py + 1, px, row1, attr)
+                safe_addstr(stdscr, py + 1, px, row1, attr, frame_bounds)
 
     # --- 4. Right Side Panel (Equipped 8-Slot Loadout + Inspector) ---
     panel_x = map_w + 1

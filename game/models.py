@@ -238,6 +238,8 @@ class Enemy:
     ability_timer: float = 0.0
     surge_timer: float = 0.0
     engaged: bool = False
+    _px: float = 0.0
+    _py: float = 0.0
 
     @property
     def kind(self) -> str:
@@ -300,6 +302,8 @@ class AllyUnit:
     revives_left: int = 0
     hit_flash: float = 0.0
     revive_flash: float = 0.0
+    _px: float = 0.0
+    _py: float = 0.0
 
     def position(self, centerline: List[Tuple[float, float]]) -> Tuple[float, float]:
         if not centerline:

@@ -37,6 +37,29 @@ if TYPE_CHECKING:
 
 
 LANE_OFFSETS: Tuple[float, ...] = (-0.42, 0.0, 0.42)
+BUCKET_W = GRID_WIDTH // 2  # 18
+BUCKET_H = GRID_HEIGHT // 2  # 9
+MAX_ACTIVE_ENEMIES_SPAWN = 120
+MAX_ACTIVE_ALLIES = 36
+MAX_SHOT_EFFECTS = 45
+
+
+def _build_path_lut(centerline: List[Tuple[float, float]]) -> List[Tuple[float, float, float, float, float, float]]:
+    """Precompute (x0, y0, dx, dy, nx, ny) per path segment for zero-sqrt entity positioning."""
+    lut: List[Tuple[float, float, float, float, float, float]] = []
+    n = len(centerline)
+    for i in range(n):
+        x0, y0 = centerline[i]
+        x1, y1 = centerline[min(n - 1, i + 1)]
+        dx = x1 - x0
+        dy = y1 - y0
+        length = math.hypot(dx, dy)
+        if length > 1e-6:
+            nx, ny = -dy / length, dx / length
+        else:
+            nx, ny = 0.0, 0.0
+        lut.append((x0, y0, dx, dy, nx, ny))
+    return lut
 
 
 class GameState:
@@ -72,6 +95,9 @@ class GameState:
             self.spawn_cells,
             self.base_cells,
         ) = self.map_def.build_geometry()
+        self._path_lut = _build_path_lut(self.centerline)
+        self._max_progress = float(len(self.centerline) - 1)
+        self._buckets: List[List[Enemy]] = [[] for _ in range(BUCKET_W * BUCKET_H)]
 
         self.gold: int = self.difficulty.starting_gold
         self.lives: int = self.difficulty.starting_lives
@@ -158,6 +184,9 @@ class GameState:
             self.spawn_cells,
             self.base_cells,
         ) = self.map_def.build_geometry()
+        self._path_lut = _build_path_lut(self.centerline)
+        self._max_progress = float(len(self.centerline) - 1)
+        self._buckets: List[List[Enemy]] = [[] for _ in range(BUCKET_W * BUCKET_H)]
         self._snap_cursor_to_buildable()
         self.log(f"Switched map to {self.map_def.name}.")
         return True
@@ -426,6 +455,55 @@ class GameState:
             return None
         return max(self.enemies, key=lambda e: e.progress)
 
+    def _pos_fast(self, progress: float, lane_offset: float) -> Tuple[float, float]:
+        lut = self._path_lut
+        max_idx = len(lut) - 1
+        if progress <= 0.0:
+            x0, y0, _, _, nx, ny = lut[0]
+            return x0 + nx * lane_offset, y0 + ny * lane_offset
+        if progress >= max_idx:
+            x0, y0, _, _, nx, ny = lut[max_idx]
+            return x0 + nx * lane_offset, y0 + ny * lane_offset
+        i = int(progress)
+        frac = progress - i
+        x0, y0, dx, dy, nx, ny = lut[i]
+        return x0 + dx * frac + nx * lane_offset, y0 + dy * frac + ny * lane_offset
+
+    def _rebuild_spatial_grid(self) -> None:
+        buckets = self._buckets
+        for b in buckets:
+            b.clear()
+        for e in self.enemies:
+            if e.hp <= 0:
+                continue
+            bx = int(e._px) >> 1
+            by = int(e._py) >> 1
+            if bx < 0:
+                bx = 0
+            elif bx >= BUCKET_W:
+                bx = BUCKET_W - 1
+            if by < 0:
+                by = 0
+            elif by >= BUCKET_H:
+                by = BUCKET_H - 1
+            buckets[by * BUCKET_W + bx].append(e)
+
+    def _query_enemies(self, cx: float, cy: float, radius: float) -> List[Enemy]:
+        """Return candidate enemies in spatial buckets overlapping [cx-r..cx+r, cy-r..cy+r]."""
+        bx0 = max(0, int(cx - radius) >> 1)
+        bx1 = min(BUCKET_W - 1, int(cx + radius) >> 1)
+        by0 = max(0, int(cy - radius) >> 1)
+        by1 = min(BUCKET_H - 1, int(cy + radius) >> 1)
+        buckets = self._buckets
+        out: List[Enemy] = []
+        for by in range(by0, by1 + 1):
+            row_off = by * BUCKET_W
+            for bx in range(bx0, bx1 + 1):
+                b = buckets[row_off + bx]
+                if b:
+                    out.extend(b)
+        return out
+
     def _spawn_enemy(
         self,
         kind: str,
@@ -444,6 +522,7 @@ class GameState:
             else LANE_OFFSETS[self._next_entity_id % len(LANE_OFFSETS)]
         )
         cd = tpl.ability_cooldown * self.difficulty.boss_cd_mult if tpl.boss_ability else 0.0
+        px, py = self._pos_fast(progress, lane)
         enemy = Enemy(
             id=self._next_entity_id,
             template=tpl,
@@ -456,17 +535,25 @@ class GameState:
             progress=progress,
             lane_offset=lane,
             ability_timer=cd,
+            _px=px,
+            _py=py,
         )
         self._next_entity_id += 1
         self.enemies.append(enemy)
+        bx = max(0, min(BUCKET_W - 1, int(px) >> 1))
+        by = max(0, min(BUCKET_H - 1, int(py) >> 1))
+        self._buckets[by * BUCKET_W + bx].append(enemy)
         return enemy
 
     def _spawn_ally(self, owner: Tower, kind: str) -> Optional[AllyUnit]:
+        if len(self.allies) >= MAX_ACTIVE_ALLIES:
+            return None
         tpl: Optional[AllyTemplate] = ALLY_TEMPLATES.get(kind)
         if tpl is None:
             return None
-        max_prog = float(len(self.centerline) - 1)
+        max_prog = self._max_progress
         lane = LANE_OFFSETS[self._next_entity_id % len(LANE_OFFSETS)]
+        px, py = self._pos_fast(max_prog, lane)
         ally = AllyUnit(
             id=self._next_entity_id,
             template=tpl,
@@ -476,6 +563,8 @@ class GameState:
             progress=max_prog,
             lane_offset=lane,
             revives_left=tpl.revives,
+            _px=px,
+            _py=py,
         )
         self._next_entity_id += 1
         self.allies.append(ally)
@@ -484,24 +573,47 @@ class GameState:
     def _select_target(self, tower: Tower, exclude_ids: Optional[Set[int]] = None) -> Optional[Enemy]:
         tx, ty = float(tower.x), float(tower.y)
         r = tower.effective_range
+        r_sq = r * r
         min_r = tower.stats.min_range
-        in_range: List[Tuple[float, Enemy]] = []
-        for e in self.enemies:
-            if e.hp <= 0:
-                continue
-            if exclude_ids and e.id in exclude_ids:
-                continue
-            ex, ey = e.position(self.centerline)
-            dist = math.hypot(ex - tx, ey - ty)
-            if min_r <= dist <= r:
-                in_range.append((dist, e))
-        if not in_range:
-            return None
-        if tower.target_mode == TARGET_STRONGEST:
-            return max(in_range, key=lambda pair: (pair[1].hp + pair[1].shield, pair[1].progress))[1]
-        if tower.target_mode == TARGET_CLOSEST:
-            return min(in_range, key=lambda pair: pair[0])[1]
-        return max(in_range, key=lambda pair: pair[1].progress)[1]
+        min_r_sq = min_r * min_r
+        mode = tower.target_mode
+
+        best: Optional[Enemy] = None
+        best_metric = 1e18 if mode == TARGET_CLOSEST else -1.0
+
+        bx0 = max(0, int(tx - r) >> 1)
+        bx1 = min(BUCKET_W - 1, int(tx + r) >> 1)
+        by0 = max(0, int(ty - r) >> 1)
+        by1 = min(BUCKET_H - 1, int(ty + r) >> 1)
+        buckets = self._buckets
+
+        for by in range(by0, by1 + 1):
+            row_off = by * BUCKET_W
+            for bx in range(bx0, bx1 + 1):
+                for e in buckets[row_off + bx]:
+                    if e.hp <= 0:
+                        continue
+                    if exclude_ids and e.id in exclude_ids:
+                        continue
+                    dx = e._px - tx
+                    dy = e._py - ty
+                    d_sq = dx * dx + dy * dy
+                    if d_sq < min_r_sq or d_sq > r_sq:
+                        continue
+                    if mode == TARGET_STRONGEST:
+                        val = e.hp + e.shield
+                        if val > best_metric:
+                            best_metric = val
+                            best = e
+                    elif mode == TARGET_CLOSEST:
+                        if d_sq < best_metric:
+                            best_metric = d_sq
+                            best = e
+                    else:
+                        if e.progress > best_metric:
+                            best_metric = e.progress
+                            best = e
+        return best
 
     def _apply_damage(
         self,
@@ -596,12 +708,14 @@ class GameState:
         ally.revives_left -= 1
         ally.hp = ally.max_hp * ally.template.revive_hp_ratio
         ally.revive_flash = 0.6
-        ax, ay = ally.position(self.centerline)
-        for enemy in list(self.enemies):
+        ax, ay = self._pos_fast(ally.progress, ally.lane_offset)
+        r_sq = 5.76  # 2.4^2
+        for enemy in self._query_enemies(ax, ay, 2.4):
             if enemy.hp <= 0:
                 continue
-            ex, ey = enemy.position(self.centerline)
-            if math.hypot(ex - ax, ey - ay) <= 2.4:
+            dx = enemy._px - ax
+            dy = enemy._py - ay
+            if dx * dx + dy * dy <= r_sq:
                 self._apply_damage(enemy, ally.template.revive_blast_dmg, None, ignore_armor=True)
         self.log(f"{ally.template.name} triggered SECOND LIFE ({ally.revives_left} left)!")
         return True
@@ -626,25 +740,130 @@ class GameState:
             self.wave_rush_cooldown = max(0.0, self.wave_rush_cooldown - dt)
 
         sim_dt = dt * self.speed_mult
-        steps = max(1, int(math.ceil(sim_dt / 0.05)))
+        steps = min(4, max(1, int(math.ceil(sim_dt / 0.10))))
         step_dt = sim_dt / steps
-        for _ in range(steps):
-            self._step(step_dt)
+        for idx in range(steps):
+            self._step(step_dt, emit_visuals=(idx == steps - 1))
             if self.game_over:
                 break
 
-    def _step(self, dt: float) -> None:
-        for shot in self.shots:
-            shot.ttl -= dt
-        self.shots = [s for s in self.shots if s.ttl > 0]
+    def _emit_shot(self, x0: float, y0: float, x1: float, y1: float, char: str, kind: str) -> None:
+        if len(self.shots) < MAX_SHOT_EFFECTS:
+            self.shots.append(ShotEffect(x0=x0, y0=y0, x1=x1, y1=y1, char=char, kind=kind))
 
-        if self.spawn_queue:
+    def _fire_tower_once(self, tower: Tower, target: Enemy, emit_visuals: bool) -> None:
+        st = tower.stats
+        tx, ty = float(tower.x), float(tower.y)
+        ex, ey = target._px, target._py
+        if emit_visuals:
+            self._emit_shot(tx, ty, ex, ey, tower.blueprint.shot_char, tower.kind)
+
+        eff_dmg = tower.effective_damage
+        is_aoe = st.splash_radius > 0
+        dealt = self._apply_damage(
+            target,
+            eff_dmg,
+            tower,
+            armor_pierce=st.armor_pierce,
+            can_evade=not is_aoe,
+            execute_pct=st.execute_pct,
+        )
+
+        if dealt > 0 and st.armor_shred > 0 and target.hp > 0:
+            target.armor_current = max(0.0, target.armor_current - st.armor_shred)
+
+        if st.stun_duration > 0 and target.hp > 0 and not target.is_boss:
+            target.stun_timer = max(target.stun_timer, st.stun_duration)
+
+        if st.poison_dps > 0 and target.hp > 0:
+            scaled_dps = st.poison_dps * tower.buff_dmg_mult
+            if scaled_dps >= target.poison_dps or target.poison_timer <= 0:
+                target.poison_dps = scaled_dps
+                target.poison_source_tower = tower
+            target.poison_timer = max(target.poison_timer, st.poison_duration)
+
+        if st.slow_factor > 0 and target.hp > 0 and not target.template.slow_immune:
+            if st.slow_factor >= target.slow_factor:
+                target.slow_factor = st.slow_factor
+            target.slow_timer = max(target.slow_timer, st.slow_duration)
+
+        if st.splash_radius > 0:
+            splash_dmg = eff_dmg * st.splash_ratio
+            sr_sq = st.splash_radius * st.splash_radius
+            for other in self._query_enemies(ex, ey, st.splash_radius):
+                if other.id == target.id or other.hp <= 0:
+                    continue
+                dx = other._px - ex
+                dy = other._py - ey
+                if dx * dx + dy * dy <= sr_sq:
+                    s_dealt = self._apply_damage(
+                        other,
+                        splash_dmg,
+                        tower,
+                        armor_pierce=st.armor_pierce,
+                        execute_pct=st.execute_pct,
+                    )
+                    if s_dealt > 0 and st.armor_shred > 0 and other.hp > 0:
+                        other.armor_current = max(0.0, other.armor_current - st.armor_shred)
+                    if st.slow_factor > 0 and other.hp > 0 and not other.template.slow_immune:
+                        if st.slow_factor >= other.slow_factor:
+                            other.slow_factor = st.slow_factor
+                        other.slow_timer = max(other.slow_timer, st.slow_duration)
+                    if st.poison_dps > 0 and other.hp > 0:
+                        other.poison_dps = max(other.poison_dps, st.poison_dps * tower.buff_dmg_mult)
+                        other.poison_timer = max(other.poison_timer, st.poison_duration)
+                        other.poison_source_tower = tower
+
+        if st.chain_count > 1:
+            hit_ids: Set[int] = {target.id}
+            curr_x, curr_y = ex, ey
+            curr_dmg = eff_dmg * st.chain_falloff
+            for _ in range(st.chain_count - 1):
+                best_n: Optional[Enemy] = None
+                best_d_sq = 14.44  # 3.8^2
+                for cand in self._query_enemies(curr_x, curr_y, 3.8):
+                    if cand.hp <= 0 or cand.id in hit_ids:
+                        continue
+                    dx = cand._px - curr_x
+                    dy = cand._py - curr_y
+                    d_sq = dx * dx + dy * dy
+                    if d_sq <= best_d_sq:
+                        best_d_sq = d_sq
+                        best_n = cand
+                if best_n is None:
+                    break
+                hit_ids.add(best_n.id)
+                nx, ny = best_n._px, best_n._py
+                if emit_visuals:
+                    self._emit_shot(curr_x, curr_y, nx, ny, tower.blueprint.shot_char, tower.kind)
+                self._apply_damage(
+                    best_n, curr_dmg, tower, armor_pierce=st.armor_pierce, execute_pct=st.execute_pct
+                )
+                if st.stun_duration > 0 and best_n.hp > 0 and not best_n.is_boss:
+                    best_n.stun_timer = max(best_n.stun_timer, st.stun_duration * 0.7)
+                if st.poison_dps > 0 and best_n.hp > 0:
+                    best_n.poison_dps = max(best_n.poison_dps, st.poison_dps * tower.buff_dmg_mult)
+                    best_n.poison_timer = max(best_n.poison_timer, st.poison_duration)
+                    best_n.poison_source_tower = tower
+                curr_x, curr_y = nx, ny
+                curr_dmg *= st.chain_falloff
+
+    def _step(self, dt: float, emit_visuals: bool = True) -> None:
+        if self.shots:
+            for shot in self.shots:
+                shot.ttl -= dt
+            self.shots = [s for s in self.shots if s.ttl > 0]
+
+        if self.spawn_queue and len(self.enemies) < MAX_ACTIVE_ENEMIES_SPAWN:
             self.spawn_timer -= dt
-            while self.spawn_queue and self.spawn_timer <= 0:
+            while self.spawn_queue and self.spawn_timer <= 0 and len(self.enemies) < MAX_ACTIVE_ENEMIES_SPAWN:
                 entry = self.spawn_queue.pop(0)
                 self._spawn_enemy(entry.kind, hp_scale=entry.hp_scale)
                 if self.spawn_queue:
                     self.spawn_timer += self.spawn_queue[0].delay
+
+        # Refresh spatial grid once per sub-step before aura, ally, and tower passes
+        self._rebuild_spatial_grid()
 
         # Farms, Spawners, Spike Factories, Ally-Healing Support Towers
         for tower in self.towers.values():
@@ -656,16 +875,20 @@ class GameState:
                     self.gold += st.income_per_tick
                     tower.gold_earned += st.income_per_tick
             if st.heal_allies_per_sec > 0 and self.allies:
+                r_sq = tower.effective_range ** 2
                 for ally in self.allies:
                     if ally.hp <= 0 or ally.hp >= ally.max_hp:
                         continue
-                    ax, ay = ally.position(self.centerline)
-                    if math.hypot(ax - tower.x, ay - tower.y) <= tower.effective_range:
+                    dx = ally._px - tower.x
+                    dy = ally._py - tower.y
+                    if dx * dx + dy * dy <= r_sq:
                         ally.hp = min(ally.max_hp, ally.hp + st.heal_allies_per_sec * dt)
-            if st.spawn_ally_kind and st.spawn_interval > 0:
-                active_owned = sum(
-                    1 for a in self.allies if a.owner_pos == (tower.x, tower.y) and a.hp > 0
-                )
+            if st.spawn_ally_kind and st.spawn_interval > 0 and len(self.allies) < MAX_ACTIVE_ALLIES:
+                active_owned = 0
+                tpos = (tower.x, tower.y)
+                for a in self.allies:
+                    if a.owner_pos == tpos and a.hp > 0:
+                        active_owned += 1
                 if active_owned < st.max_active_allies:
                     tower.spawn_timer -= dt
                     if tower.spawn_timer <= 0:
@@ -675,10 +898,11 @@ class GameState:
                 if tower.cooldown_left > 0:
                     tower.cooldown_left = max(0.0, tower.cooldown_left - dt)
                 if tower.cooldown_left <= 0:
+                    r_sq = tower.effective_range ** 2
                     nearby_road = [
                         (rx, ry)
                         for (rx, ry) in self.road_set
-                        if math.hypot(rx - tower.x, ry - tower.y) <= tower.effective_range
+                        if (rx - tower.x) ** 2 + (ry - tower.y) ** 2 <= r_sq
                         and (rx, ry) not in self.spikes
                     ]
                     if nearby_road:
@@ -692,24 +916,27 @@ class GameState:
                         )
                         tower.cooldown_left = tower.effective_cooldown
 
-        # Enemy heal auras
-        healers = [e for e in self.enemies if e.hp > 0 and e.template.heal_aura_per_sec > 0]
-        for healer in healers:
-            hx, hy = healer.position(self.centerline)
+        # Enemy heal auras via spatial grid
+        for healer in self.enemies:
+            if healer.hp <= 0 or healer.template.heal_aura_per_sec <= 0:
+                continue
+            hx, hy = healer._px, healer._py
             rad = healer.template.heal_aura_radius
+            rad_sq = rad * rad
             heal_amt = healer.template.heal_aura_per_sec * dt
-            for ally_e in self.enemies:
+            for ally_e in self._query_enemies(hx, hy, rad):
                 if ally_e.hp <= 0 or ally_e.hp >= ally_e.max_hp:
                     continue
-                ax, ay = ally_e.position(self.centerline)
-                if math.hypot(ax - hx, ay - hy) <= rad:
+                dx = ally_e._px - hx
+                dy = ally_e._py - hy
+                if dx * dx + dy * dy <= rad_sq:
                     ally_e.hp = min(ally_e.max_hp, ally_e.hp + heal_amt)
 
-        # Friendly AllyUnits vs Enemies
+        # Friendly AllyUnits vs Enemies via spatial grid
         for e in self.enemies:
             e.engaged = False
 
-        for ally in list(self.allies):
+        for ally in self.allies:
             if ally.hp <= 0:
                 continue
             if ally.hit_flash > 0:
@@ -717,17 +944,21 @@ class GameState:
             if ally.revive_flash > 0:
                 ally.revive_flash = max(0.0, ally.revive_flash - dt)
 
+            ax, ay = ally._px, ally._py
             nearby = [
-                e for e in self.enemies if e.hp > 0 and abs(e.progress - ally.progress) <= 0.95
+                e
+                for e in self._query_enemies(ax, ay, 1.5)
+                if e.hp > 0 and abs(e.progress - ally.progress) <= 0.95
             ]
             if nearby:
                 target_e = max(nearby, key=lambda e: e.progress)
                 target_e.engaged = True
                 if ally.template.splash_radius > 0:
-                    ax, ay = ally.position(self.centerline)
-                    for e in list(nearby):
-                        ex, ey = e.position(self.centerline)
-                        if math.hypot(ex - ax, ey - ay) <= ally.template.splash_radius:
+                    sr_sq = ally.template.splash_radius ** 2
+                    for e in nearby:
+                        dx = e._px - ax
+                        dy = e._py - ay
+                        if dx * dx + dy * dy <= sr_sq:
                             self._apply_damage(e, ally.template.atk_dps * dt, None, armor_pierce=0.35)
                 else:
                     self._apply_damage(target_e, ally.template.atk_dps * dt, None, armor_pierce=0.25)
@@ -740,12 +971,13 @@ class GameState:
             else:
                 if ally.progress > 0.35:
                     ally.progress = max(0.35, ally.progress - ally.template.speed * dt)
+                    ally._px, ally._py = self._pos_fast(ally.progress, ally.lane_offset)
 
         self.allies = [a for a in self.allies if a.hp > 0]
 
-        # Move enemies
+        # Move enemies & update cached positions
         reached_goal: List[Enemy] = []
-        max_progress = float(len(self.centerline) - 1)
+        max_progress = self._max_progress
         for enemy in list(self.enemies):
             if enemy.hp <= 0:
                 continue
@@ -787,18 +1019,22 @@ class GameState:
                 if enemy.surge_timer > 0:
                     eff_speed *= 1.65
 
-                prev_cell = enemy.grid_cell(self.centerline, self.road_set)
+                prev_gx = int(round(enemy._px))
+                prev_gy = int(round(enemy._py))
                 enemy.progress += eff_speed * dt
-                new_cell = enemy.grid_cell(self.centerline, self.road_set)
-                if new_cell in self.spikes and new_cell != prev_cell:
-                    spike = self.spikes[new_cell]
-                    owner_t = self.towers.get(spike.owner_pos)
-                    self._apply_damage(enemy, spike.damage, owner_t, armor_pierce=1.0)
-                    spike.charges -= 1
-                    if spike.charges <= 0:
-                        self.spikes.pop(new_cell, None)
-                    if enemy.hp <= 0:
-                        continue
+                nx, ny = self._pos_fast(enemy.progress, enemy.lane_offset)
+                enemy._px, enemy._py = nx, ny
+                if self.spikes:
+                    new_cell = (int(round(nx)), int(round(ny)))
+                    if new_cell != (prev_gx, prev_gy) and new_cell in self.spikes:
+                        spike = self.spikes[new_cell]
+                        owner_t = self.towers.get(spike.owner_pos)
+                        self._apply_damage(enemy, spike.damage, owner_t, armor_pierce=1.0)
+                        spike.charges -= 1
+                        if spike.charges <= 0:
+                            self.spikes.pop(new_cell, None)
+                        if enemy.hp <= 0:
+                            continue
 
             if enemy.progress >= max_progress:
                 reached_goal.append(enemy)
@@ -817,115 +1053,33 @@ class GameState:
                 self.log(f"DEFEAT! Earned +{coins} Coins for your effort.")
                 return
 
-        # Combat towers fire
-        for tower in self.towers.values():
-            st = tower.stats
-            if st.damage <= 0 or st.spike_damage > 0:
-                continue
-            if tower.cooldown_left > 0:
-                tower.cooldown_left = max(0.0, tower.cooldown_left - dt)
-            if tower.cooldown_left > 0 or not self.enemies:
-                continue
-            target = self._select_target(tower)
-            if target is None:
-                continue
+        # Refresh spatial grid after enemy movement before tower targeting
+        self._rebuild_spatial_grid()
 
-            tower.cooldown_left = tower.effective_cooldown
-            tx, ty = float(tower.x), float(tower.y)
-            ex, ey = target.position(self.centerline)
-            self.shots.append(
-                ShotEffect(x0=tx, y0=ty, x1=ex, y1=ey, char=tower.blueprint.shot_char, kind=tower.kind)
-            )
-
-            eff_dmg = tower.effective_damage
-            is_aoe = st.splash_radius > 0
-            dealt = self._apply_damage(
-                target,
-                eff_dmg,
-                tower,
-                armor_pierce=st.armor_pierce,
-                can_evade=not is_aoe,
-                execute_pct=st.execute_pct,
-            )
-
-            if dealt > 0 and st.armor_shred > 0 and target.hp > 0:
-                target.armor_current = max(0.0, target.armor_current - st.armor_shred)
-
-            if st.stun_duration > 0 and target.hp > 0 and not target.is_boss:
-                target.stun_timer = max(target.stun_timer, st.stun_duration)
-
-            if st.poison_dps > 0 and target.hp > 0:
-                scaled_dps = st.poison_dps * tower.buff_dmg_mult
-                if scaled_dps >= target.poison_dps or target.poison_timer <= 0:
-                    target.poison_dps = scaled_dps
-                    target.poison_source_tower = tower
-                target.poison_timer = max(target.poison_timer, st.poison_duration)
-
-            if st.slow_factor > 0 and target.hp > 0 and not target.template.slow_immune:
-                if st.slow_factor >= target.slow_factor:
-                    target.slow_factor = st.slow_factor
-                target.slow_timer = max(target.slow_timer, st.slow_duration)
-
-            if st.splash_radius > 0:
-                splash_dmg = eff_dmg * st.splash_ratio
-                for other in list(self.enemies):
-                    if other.id == target.id or other.hp <= 0:
-                        continue
-                    ox, oy = other.position(self.centerline)
-                    if math.hypot(ox - ex, oy - ey) <= st.splash_radius:
-                        s_dealt = self._apply_damage(
-                            other,
-                            splash_dmg,
-                            tower,
-                            armor_pierce=st.armor_pierce,
-                            execute_pct=st.execute_pct,
-                        )
-                        if s_dealt > 0 and st.armor_shred > 0 and other.hp > 0:
-                            other.armor_current = max(0.0, other.armor_current - st.armor_shred)
-                        if st.slow_factor > 0 and other.hp > 0 and not other.template.slow_immune:
-                            if st.slow_factor >= other.slow_factor:
-                                other.slow_factor = st.slow_factor
-                            other.slow_timer = max(other.slow_timer, st.slow_duration)
-                        if st.poison_dps > 0 and other.hp > 0:
-                            other.poison_dps = max(other.poison_dps, st.poison_dps * tower.buff_dmg_mult)
-                            other.poison_timer = max(other.poison_timer, st.poison_duration)
-                            other.poison_source_tower = tower
-
-            if st.chain_count > 1:
-                hit_ids: Set[int] = {target.id}
-                curr_x, curr_y = ex, ey
-                curr_dmg = eff_dmg * st.chain_falloff
-                for _ in range(st.chain_count - 1):
-                    candidates = [e for e in self.enemies if e.hp > 0 and e.id not in hit_ids]
-                    if not candidates:
+        # Combat towers fire (multi-shot cooldown accumulator for exact DPS at high speed!)
+        if self.enemies:
+            for tower in self.towers.values():
+                st = tower.stats
+                if st.damage <= 0 or st.spike_damage > 0:
+                    continue
+                tower.cooldown_left -= dt
+                if tower.cooldown_left > 0:
+                    continue
+                eff_cd = tower.effective_cooldown
+                shots_ready = min(4, 1 + int(-tower.cooldown_left / eff_cd))
+                fired = 0
+                for s_i in range(shots_ready):
+                    target = self._select_target(tower)
+                    if target is None:
                         break
-                    nxt = min(
-                        candidates,
-                        key=lambda e: math.hypot(
-                            e.position(self.centerline)[0] - curr_x,
-                            e.position(self.centerline)[1] - curr_y,
-                        ),
-                    )
-                    nx, ny = nxt.position(self.centerline)
-                    if math.hypot(nx - curr_x, ny - curr_y) > 3.8:
-                        break
-                    hit_ids.add(nxt.id)
-                    self.shots.append(
-                        ShotEffect(
-                            x0=curr_x, y0=curr_y, x1=nx, y1=ny, char=tower.blueprint.shot_char, kind=tower.kind
-                        )
-                    )
-                    self._apply_damage(
-                        nxt, curr_dmg, tower, armor_pierce=st.armor_pierce, execute_pct=st.execute_pct
-                    )
-                    if st.stun_duration > 0 and nxt.hp > 0 and not nxt.is_boss:
-                        nxt.stun_timer = max(nxt.stun_timer, st.stun_duration * 0.7)
-                    if st.poison_dps > 0 and nxt.hp > 0:
-                        nxt.poison_dps = max(nxt.poison_dps, st.poison_dps * tower.buff_dmg_mult)
-                        nxt.poison_timer = max(nxt.poison_timer, st.poison_duration)
-                        nxt.poison_source_tower = tower
-                    curr_x, curr_y = nx, ny
-                    curr_dmg *= st.chain_falloff
+                    self._fire_tower_once(tower, target, emit_visuals and (s_i == shots_ready - 1))
+                    fired += 1
+                if fired > 0:
+                    tower.cooldown_left += fired * eff_cd
+                    if tower.cooldown_left < 0:
+                        tower.cooldown_left = eff_cd
+                else:
+                    tower.cooldown_left = 0.0
 
         self.enemies = [e for e in self.enemies if e.hp > 0]
 

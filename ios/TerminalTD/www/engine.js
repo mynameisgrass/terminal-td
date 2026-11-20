@@ -14,6 +14,12 @@
     all_cr: "ALL C+Rare",
   };
   const TARGET_MODES = ["first", "strongest", "closest"];
+  const MAX_ACTIVE_ENEMIES_SPAWN = 120;
+  const MAX_ACTIVE_ALLIES = 36;
+  const MAX_SHOT_EFFECTS = 45;
+  const BUCKET_W = 18;
+  const BUCKET_H = 9;
+  const NUM_BUCKETS = BUCKET_W * BUCKET_H;
 
   function createProfile() {
     const fallback = () => {
@@ -266,13 +272,14 @@
       return entries;
     }
     const extra = waveNum - D.WAVES.length;
-    const hpScale = Math.pow(1.28, extra);
+    const hpScale = Math.pow(1.14, Math.min(extra, 15)) * (1 + Math.max(0, extra - 15) * 0.35);
+    const cScale = Math.min(extra, 18);
     const groups = [
-      ["void_stalker", 14 + extra, 0.3],
-      ["chrono_knight", 10 + extra, 0.42],
-      ["colossus", 8 + Math.floor(extra / 2), 0.75],
-      ["behemoth", 7 + Math.floor(extra / 2), 0.85],
-      [extra % 2 === 1 ? "boss_chronos" : "boss_omega", 1 + Math.floor(extra / 3), 2.2],
+      ["void_stalker", 14 + cScale, 0.25],
+      ["chrono_knight", 10 + cScale, 0.36],
+      ["colossus", 8 + Math.floor(cScale / 2), 0.65],
+      ["behemoth", 7 + Math.floor(cScale / 2), 0.75],
+      [extra % 2 === 1 ? "boss_chronos" : "boss_omega", Math.min(5, 1 + Math.floor(extra / 5)), 1.9],
     ];
     for (const [kind, count, interval] of groups) {
       for (let i = 0; i < count; i++) {
@@ -326,6 +333,11 @@
       this.victory = false;
       this.selectedCell = null;
       this.nextId = 1;
+      this._pxOut = 0;
+      this._pyOut = 0;
+      this._qBuf = [];
+      this.buckets = Array.from({ length: NUM_BUCKETS }, () => []);
+      this._buildPathLut();
       this.logs = [`${this.difficulty.name} on ${this.mapDef.name}. Tap grass to build, tap Wave to begin!`];
     }
 
@@ -519,24 +531,74 @@
       return true;
     }
 
-    entityPos(progress, laneOffset) {
+    _buildPathLut() {
       const cl = this.centerline;
-      const maxIdx = cl.length - 1;
-      const c = Math.max(0, Math.min(maxIdx, progress));
-      const i = Math.min(maxIdx - 1, Math.floor(c));
-      const frac = c - i;
-      const [x0, y0] = cl[i];
-      const [x1, y1] = cl[Math.min(maxIdx, i + 1)];
-      let px = x0 + (x1 - x0) * frac;
-      let py = y0 + (y1 - y0) * frac;
-      const dx = x1 - x0;
-      const dy = y1 - y0;
-      const len = Math.hypot(dx, dy);
-      if (len > 1e-6 && laneOffset) {
-        px += (-dy / len) * laneOffset;
-        py += (dx / len) * laneOffset;
+      const n = cl.length;
+      this._maxProg = n - 1;
+      this._pathLut = [];
+      for (let i = 0; i < n; i++) {
+        const [x0, y0] = cl[i];
+        const [x1, y1] = cl[Math.min(n - 1, i + 1)];
+        const dx = x1 - x0;
+        const dy = y1 - y0;
+        const len = Math.hypot(dx, dy);
+        const nx = len > 1e-6 ? -dy / len : 0;
+        const ny = len > 1e-6 ? dx / len : 0;
+        this._pathLut.push([x0, y0, dx, dy, nx, ny]);
       }
-      return [px, py];
+    }
+
+    _computePos(progress, laneOffset) {
+      const maxIdx = this._maxProg;
+      const c = progress <= 0 ? 0 : progress >= maxIdx ? maxIdx : progress;
+      const i = c >= maxIdx - 1 ? maxIdx - 1 : c | 0;
+      const frac = c - i;
+      const seg = this._pathLut[i];
+      this._pxOut = seg[0] + seg[2] * frac + seg[4] * (laneOffset || 0);
+      this._pyOut = seg[1] + seg[3] * frac + seg[5] * (laneOffset || 0);
+    }
+
+    entityPos(progress, laneOffset) {
+      this._computePos(progress, laneOffset);
+      return [this._pxOut, this._pyOut];
+    }
+
+    rebuildSpatialGrid() {
+      const buckets = this.buckets;
+      for (let i = 0; i < NUM_BUCKETS; i++) buckets[i].length = 0;
+      for (let i = 0; i < this.enemies.length; i++) {
+        const e = this.enemies[i];
+        if (e.hp <= 0) continue;
+        let bx = (e._px * 0.5) | 0;
+        let by = (e._py * 0.5) | 0;
+        if (bx < 0) bx = 0;
+        else if (bx >= BUCKET_W) bx = BUCKET_W - 1;
+        if (by < 0) by = 0;
+        else if (by >= BUCKET_H) by = BUCKET_H - 1;
+        buckets[by * BUCKET_W + bx].push(e);
+      }
+    }
+
+    _queryEnemies(cx, cy, radius) {
+      const out = this._qBuf;
+      out.length = 0;
+      let bx0 = ((cx - radius) * 0.5) | 0;
+      let bx1 = ((cx + radius) * 0.5) | 0;
+      let by0 = ((cy - radius) * 0.5) | 0;
+      let by1 = ((cy + radius) * 0.5) | 0;
+      if (bx0 < 0) bx0 = 0;
+      if (by0 < 0) by0 = 0;
+      if (bx1 >= BUCKET_W) bx1 = BUCKET_W - 1;
+      if (by1 >= BUCKET_H) by1 = BUCKET_H - 1;
+      const buckets = this.buckets;
+      for (let by = by0; by <= by1; by++) {
+        const rowOff = by * BUCKET_W;
+        for (let bx = bx0; bx <= bx1; bx++) {
+          const b = buckets[rowOff + bx];
+          for (let k = 0; k < b.length; k++) out.push(b[k]);
+        }
+      }
+      return out;
     }
 
     spawnEnemy(kind, hpScale = 1, progress = 0, laneOffset = null) {
@@ -572,16 +634,22 @@
     }
 
     spawnAlly(owner, kind) {
+      if (this.allies.length >= MAX_ACTIVE_ALLIES) return null;
       const tpl = D.ALLIES[kind];
       if (!tpl) return null;
+      const prog = this._maxProg;
+      const lane = LANE_OFFSETS[this.nextId % LANE_OFFSETS.length];
+      this._computePos(prog, lane);
       const ally = {
         id: this.nextId++,
         tpl,
         ownerKey: `${owner.x},${owner.y}`,
         hp: tpl.max_hp,
         maxHp: tpl.max_hp,
-        progress: this.centerline.length - 1,
-        laneOffset: LANE_OFFSETS[this.nextId % LANE_OFFSETS.length],
+        progress: prog,
+        laneOffset: lane,
+        _px: this._pxOut,
+        _py: this._pyOut,
         revivesLeft: tpl.revives,
         hitFlash: 0,
         reviveFlash: 0,
@@ -690,7 +758,7 @@
       if (this.waveRushCooldown > 0) this.waveRushCooldown = Math.max(0, this.waveRushCooldown - dt);
 
       const simDt = dt * this.speedMult;
-      const steps = Math.max(1, Math.ceil(simDt / 0.05));
+      const steps = Math.min(4, Math.max(1, Math.ceil(simDt / 0.10)));
       const stepDt = simDt / steps;
       for (let i = 0; i < steps; i++) {
         this.step(stepDt, i === steps - 1);
@@ -699,7 +767,7 @@
     }
 
     emitShot(x0, y0, x1, y1, rarity, kind) {
-      if (this.shots.length >= 65) return;
+      if (this.shots.length >= MAX_SHOT_EFFECTS) return;
       this.shots.push({ x0, y0, x1, y1, rarity, kind, ttl: 0.14, maxTtl: 0.14 });
     }
 
@@ -713,10 +781,123 @@
       this.floatTexts.push({ x, y, text, color, ttl });
     }
 
+    _fireTowerOnce(t, st, effDmg, effRSq, minRSq, emitVisuals) {
+      const effR = st.range * t.buffRng;
+      const nearby = this._queryEnemies(t.x, t.y, effR);
+      let target = null;
+      let bestMetric = t.targetMode === "closest" ? 1e12 : -1;
+
+      for (let i = 0; i < nearby.length; i++) {
+        const e = nearby[i];
+        if (e.hp <= 0) continue;
+        const dx = e._px - t.x, dy = e._py - t.y;
+        const dSq = dx * dx + dy * dy;
+        if (dSq < minRSq || dSq > effRSq) continue;
+        if (t.targetMode === "strongest") {
+          const val = e.hp + e.shield;
+          if (val > bestMetric) { bestMetric = val; target = e; }
+        } else if (t.targetMode === "closest") {
+          if (dSq < bestMetric) { bestMetric = dSq; target = e; }
+        } else {
+          if (e.progress > bestMetric) { bestMetric = e.progress; target = e; }
+        }
+      }
+      if (!target) return false;
+
+      const tx = target._px, ty = target._py;
+      t.angle = Math.atan2(ty - t.y, tx - t.x);
+
+      if (emitVisuals) {
+        this.emitShot(t.x + 0.5, t.y + 0.5, tx + 0.5, ty + 0.5, D.TOWERS[t.kind].rarity, t.kind);
+        if (window.TDAudio && Math.random() < 0.28) window.TDAudio.playShoot(t.kind);
+      }
+
+      const dealt = this.applyDamage(
+        target, effDmg, t, st.armor_pierce, false, st.splash_radius === 0, st.execute_pct
+      );
+      if (dealt > 0 && st.armor_shred > 0 && target.hp > 0) {
+        target.armorCurrent = Math.max(0, target.armorCurrent - st.armor_shred);
+      }
+      if (st.stun_duration > 0 && target.hp > 0 && !target.tpl.is_boss) {
+        target.stunTimer = Math.max(target.stunTimer, st.stun_duration);
+      }
+      if (st.poison_dps > 0 && target.hp > 0) {
+        const sd = st.poison_dps * t.buffDmg;
+        if (sd >= target.poisonDps || target.poisonTimer <= 0) {
+          target.poisonDps = sd;
+          target.poisonSource = t;
+        }
+        target.poisonTimer = Math.max(target.poisonTimer, st.poison_duration);
+      }
+      if (st.slow_factor > 0 && target.hp > 0 && !target.tpl.slow_immune) {
+        target.slowFactor = Math.max(target.slowFactor, st.slow_factor);
+        target.slowTimer = Math.max(target.slowTimer, st.slow_duration);
+      }
+
+      if (st.splash_radius > 0) {
+        if (emitVisuals) {
+          this.emitEffect(tx + 0.5, ty + 0.5, st.splash_radius, st.slow_factor > 0 ? "#38bdf8" : "#f97316", 0.22);
+        }
+        const srSq = st.splash_radius * st.splash_radius;
+        const sDmg = effDmg * st.splash_ratio;
+        const splNearby = this._queryEnemies(tx, ty, st.splash_radius);
+        for (let i = 0; i < splNearby.length; i++) {
+          const other = splNearby[i];
+          if (other.id === target.id || other.hp <= 0) continue;
+          const dx = other._px - tx, dy = other._py - ty;
+          if (dx * dx + dy * dy <= srSq) {
+            const sd = this.applyDamage(other, sDmg, t, st.armor_pierce, false, false, st.execute_pct);
+            if (sd > 0 && st.armor_shred > 0 && other.hp > 0) {
+              other.armorCurrent = Math.max(0, other.armorCurrent - st.armor_shred);
+            }
+            if (st.slow_factor > 0 && other.hp > 0 && !other.tpl.slow_immune) {
+              other.slowFactor = Math.max(other.slowFactor, st.slow_factor);
+              other.slowTimer = Math.max(other.slowTimer, st.slow_duration);
+            }
+            if (st.poison_dps > 0 && other.hp > 0) {
+              other.poisonDps = Math.max(other.poisonDps, st.poison_dps * t.buffDmg);
+              other.poisonTimer = Math.max(other.poisonTimer, st.poison_duration);
+              other.poisonSource = t;
+            }
+          }
+        }
+      }
+
+      if (st.chain_count > 1) {
+        const hitIds = new Set([target.id]);
+        let cx = tx, cy = ty;
+        let cdmg = effDmg * st.chain_falloff;
+        for (let c = 1; c < st.chain_count; c++) {
+          let bestN = null, bestDSq = 14.44; // 3.8^2
+          const cands = this._queryEnemies(cx, cy, 3.8);
+          for (let i = 0; i < cands.length; i++) {
+            const cand = cands[i];
+            if (cand.hp <= 0 || hitIds.has(cand.id)) continue;
+            const dx = cand._px - cx, dy = cand._py - cy;
+            const dSq = dx * dx + dy * dy;
+            if (dSq <= bestDSq) {
+              bestDSq = dSq; bestN = cand;
+            }
+          }
+          if (!bestN) break;
+          hitIds.add(bestN.id);
+          if (emitVisuals) {
+            this.emitShot(cx + 0.5, cy + 0.5, bestN._px + 0.5, bestN._py + 0.5, D.TOWERS[t.kind].rarity, t.kind);
+          }
+          this.applyDamage(bestN, cdmg, t, st.armor_pierce, false, false, st.execute_pct);
+          if (st.stun_duration > 0 && bestN.hp > 0 && !bestN.tpl.is_boss) {
+            bestN.stunTimer = Math.max(bestN.stunTimer, st.stun_duration * 0.7);
+          }
+          cx = bestN._px; cy = bestN._py; cdmg *= st.chain_falloff;
+        }
+      }
+      return true;
+    }
+
     step(dt, emitVisuals = true) {
-      if (this.spawnQueue.length > 0) {
+      if (this.spawnQueue.length > 0 && this.enemies.length < MAX_ACTIVE_ENEMIES_SPAWN) {
         this.spawnTimer -= dt;
-        while (this.spawnQueue.length > 0 && this.spawnTimer <= 0) {
+        while (this.spawnQueue.length > 0 && this.spawnTimer <= 0 && this.enemies.length < MAX_ACTIVE_ENEMIES_SPAWN) {
           const ent = this.spawnQueue.shift();
           this.spawnEnemy(ent.kind, ent.hpScale);
           if (this.spawnQueue.length > 0) this.spawnTimer += this.spawnQueue[0].delay;
@@ -732,7 +913,7 @@
             t.incomeTimer += st.income_interval;
             this.gold += st.income_per_tick;
             t.goldEarned += st.income_per_tick;
-            this.emitFloat(t.x + 0.5, t.y, `+$${st.income_per_tick}`, "#fbbf24", 0.7);
+            if (emitVisuals) this.emitFloat(t.x + 0.5, t.y, `+$${st.income_per_tick}`, "#fbbf24", 0.7);
           }
         }
         if (st.heal_allies_per_sec > 0 && this.allies.length > 0) {
@@ -740,8 +921,11 @@
           const effRSq = effR * effR;
           for (const a of this.allies) {
             if (a.hp <= 0 || a.hp >= a.maxHp) continue;
-            const [ax, ay] = this.entityPos(a.progress, a.laneOffset);
-            const dx = ax - t.x, dy = ay - t.y;
+            if (a._px === undefined) {
+              this._computePos(a.progress, a.laneOffset);
+              a._px = this._pxOut; a._py = this._pyOut;
+            }
+            const dx = a._px - t.x, dy = a._py - t.y;
             if (dx * dx + dy * dy <= effRSq) {
               a.hp = Math.min(a.maxHp, a.hp + st.heal_allies_per_sec * dt);
             }
@@ -788,19 +972,25 @@
         }
       }
 
-      // Precompute enemy positions once per sub-step
-      for (const e of this.enemies) {
+      // Precompute enemy positions once per sub-step + build spatial hash
+      for (let i = 0; i < this.enemies.length; i++) {
+        const e = this.enemies[i];
         e.engaged = false;
-        const [px, py] = this.entityPos(e.progress, e.laneOffset);
-        e._px = px;
-        e._py = py;
+        this._computePos(e.progress, e.laneOffset);
+        e._px = this._pxOut;
+        e._py = this._pyOut;
       }
+      this.rebuildSpatialGrid();
 
-      // Enemy heal auras
-      for (const h of this.enemies) {
+      // Enemy heal auras via spatial grid
+      for (let i = 0; i < this.enemies.length; i++) {
+        const h = this.enemies[i];
         if (h.hp <= 0 || h.tpl.heal_aura_per_sec <= 0) continue;
-        const rSq = h.tpl.heal_aura_radius * h.tpl.heal_aura_radius;
-        for (const a of this.enemies) {
+        const r = h.tpl.heal_aura_radius;
+        const rSq = r * r;
+        const nearby = this._queryEnemies(h._px, h._py, r);
+        for (let k = 0; k < nearby.length; k++) {
+          const a = nearby[k];
           if (a.hp <= 0 || a.hp >= a.maxHp) continue;
           const dx = a._px - h._px, dy = a._py - h._py;
           if (dx * dx + dy * dy <= rSq) {
@@ -809,23 +999,30 @@
         }
       }
 
-      // Friendly AllyUnits vs Enemies
-      for (const a of this.allies) {
+      // Friendly AllyUnits vs Enemies via spatial grid
+      for (let i = 0; i < this.allies.length; i++) {
+        const a = this.allies[i];
         if (a.hp <= 0) continue;
         a.hitFlash = Math.max(0, a.hitFlash - dt);
         a.reviveFlash = Math.max(0, a.reviveFlash - dt);
+        this._computePos(a.progress, a.laneOffset);
+        const ax = this._pxOut, ay = this._pyOut;
+        a._px = ax; a._py = ay;
+        const clash = this._queryEnemies(ax, ay, 2.5);
         let tgt = null;
-        for (const e of this.enemies) {
+        for (let k = 0; k < clash.length; k++) {
+          const e = clash[k];
           if (e.hp > 0 && Math.abs(e.progress - a.progress) <= 0.95) {
             if (!tgt || e.progress > tgt.progress) tgt = e;
           }
         }
         if (tgt) {
           tgt.engaged = true;
-          const [ax, ay] = this.entityPos(a.progress, a.laneOffset);
           if (a.tpl.splash_radius > 0) {
             const srSq = a.tpl.splash_radius * a.tpl.splash_radius;
-            for (const e of this.enemies) {
+            const spl = this._queryEnemies(ax, ay, Math.max(2.5, a.tpl.splash_radius + 0.5));
+            for (let k = 0; k < spl.length; k++) {
+              const e = spl[k];
               if (e.hp <= 0 || Math.abs(e.progress - a.progress) > 0.95) continue;
               const dx = e._px - ax, dy = e._py - ay;
               if (dx * dx + dy * dy <= srSq) {
@@ -841,7 +1038,9 @@
             a.revivesLeft -= 1;
             a.hp = a.maxHp * a.tpl.revive_hp_ratio;
             a.reviveFlash = 0.7;
-            for (const e of this.enemies) {
+            const blast = this._queryEnemies(ax, ay, 2.5);
+            for (let k = 0; k < blast.length; k++) {
+              const e = blast[k];
               if (e.hp <= 0) continue;
               const dx = e._px - ax, dy = e._py - ay;
               if (dx * dx + dy * dy <= 5.76) {
@@ -855,14 +1054,17 @@
           }
         } else if (a.progress > 0.35) {
           a.progress = Math.max(0.35, a.progress - a.tpl.speed * dt);
+          this._computePos(a.progress, a.laneOffset);
+          a._px = this._pxOut; a._py = this._pyOut;
         }
       }
       this.allies = this.allies.filter((a) => a.hp > 0);
 
       // Move enemies
-      const maxProg = this.centerline.length - 1;
+      const maxProg = this._maxProg;
       const breached = [];
-      for (const e of this.enemies) {
+      for (let i = 0; i < this.enemies.length; i++) {
+        const e = this.enemies[i];
         if (e.hp <= 0) continue;
         e.hitFlash = Math.max(0, e.hitFlash - dt);
         if (e.slowTimer > 0) {
@@ -894,16 +1096,19 @@
           if (e.surgeTimer > 0) spd *= 1.65;
           const ck0 = `${Math.round(e._px)},${Math.round(e._py)}`;
           e.progress += spd * dt;
-          const [px1, py1] = this.entityPos(e.progress, e.laneOffset);
+          this._computePos(e.progress, e.laneOffset);
+          const px1 = this._pxOut, py1 = this._pyOut;
           e._px = px1;
           e._py = py1;
-          const ck1 = `${Math.round(px1)},${Math.round(py1)}`;
-          if (ck1 !== ck0 && this.spikes.has(ck1)) {
-            const sp = this.spikes.get(ck1);
-            this.applyDamage(e, sp.damage, this.towers.get(sp.ownerKey), 1);
-            sp.charges -= 1;
-            if (sp.charges <= 0) this.spikes.delete(ck1);
-            if (e.hp <= 0) continue;
+          if (this.spikes.size > 0) {
+            const ck1 = `${Math.round(px1)},${Math.round(py1)}`;
+            if (ck1 !== ck0 && this.spikes.has(ck1)) {
+              const sp = this.spikes.get(ck1);
+              this.applyDamage(e, sp.damage, this.towers.get(sp.ownerKey), 1);
+              sp.charges -= 1;
+              if (sp.charges <= 0) this.spikes.delete(ck1);
+              if (e.hp <= 0) continue;
+            }
           }
         }
         if (e.progress >= maxProg) breached.push(e);
@@ -927,119 +1132,33 @@
         }
       }
 
-      // Towers fire (zero-allocation targeting + capped visuals)
+      // Rebuild spatial grid with updated enemy positions before towers fire
+      this.rebuildSpatialGrid();
+
+      // Towers fire (SpatialGrid + Multi-Shot Cooldown Accumulator + capped visuals)
       for (const t of this.towers.values()) {
         const st = this.towerStats(t);
         if (st.damage <= 0 || st.spike_damage > 0) continue;
-        t.cooldownLeft = Math.max(0, t.cooldownLeft - dt);
+        t.cooldownLeft -= dt;
         if (t.cooldownLeft > 0 || this.enemies.length === 0) continue;
 
+        const effCd = Math.max(0.05, st.cooldown / Math.max(0.5, t.buffSpd));
+        const shotsReady = Math.min(4, 1 + Math.floor(-t.cooldownLeft / effCd));
+        const effDmg = st.damage * t.buffDmg;
         const effR = st.range * t.buffRng;
         const effRSq = effR * effR;
         const minRSq = st.min_range * st.min_range;
-        let target = null;
-        let bestMetric = t.targetMode === "closest" ? 1e12 : -1;
+        let fired = 0;
 
-        for (const e of this.enemies) {
-          if (e.hp <= 0) continue;
-          const dx = e._px - t.x, dy = e._py - t.y;
-          const dSq = dx * dx + dy * dy;
-          if (dSq < minRSq || dSq > effRSq) continue;
-          if (t.targetMode === "strongest") {
-            const val = e.hp + e.shield;
-            if (val > bestMetric) { bestMetric = val; target = e; }
-          } else if (t.targetMode === "closest") {
-            if (dSq < bestMetric) { bestMetric = dSq; target = e; }
-          } else {
-            if (e.progress > bestMetric) { bestMetric = e.progress; target = e; }
-          }
+        for (let s = 0; s < shotsReady; s++) {
+          const ok = this._fireTowerOnce(t, st, effDmg, effRSq, minRSq, emitVisuals && s === 0);
+          if (!ok) break;
+          fired++;
         }
-        if (!target) continue;
-
-        const tx = target._px, ty = target._py;
-        t.angle = Math.atan2(ty - t.y, tx - t.x);
-        t.cooldownLeft = st.cooldown / Math.max(0.5, t.buffSpd);
-
-        if (emitVisuals) {
-          this.emitShot(t.x + 0.5, t.y + 0.5, tx + 0.5, ty + 0.5, D.TOWERS[t.kind].rarity, t.kind);
-          if (window.TDAudio && Math.random() < 0.28) window.TDAudio.playShoot(t.kind);
-        }
-
-        const effDmg = st.damage * t.buffDmg;
-        const dealt = this.applyDamage(
-          target, effDmg, t, st.armor_pierce, false, st.splash_radius === 0, st.execute_pct
-        );
-        if (dealt > 0 && st.armor_shred > 0 && target.hp > 0) {
-          target.armorCurrent = Math.max(0, target.armorCurrent - st.armor_shred);
-        }
-        if (st.stun_duration > 0 && target.hp > 0 && !target.tpl.is_boss) {
-          target.stunTimer = Math.max(target.stunTimer, st.stun_duration);
-        }
-        if (st.poison_dps > 0 && target.hp > 0) {
-          const sd = st.poison_dps * t.buffDmg;
-          if (sd >= target.poisonDps || target.poisonTimer <= 0) {
-            target.poisonDps = sd;
-            target.poisonSource = t;
-          }
-          target.poisonTimer = Math.max(target.poisonTimer, st.poison_duration);
-        }
-        if (st.slow_factor > 0 && target.hp > 0 && !target.tpl.slow_immune) {
-          target.slowFactor = Math.max(target.slowFactor, st.slow_factor);
-          target.slowTimer = Math.max(target.slowTimer, st.slow_duration);
-        }
-
-        if (st.splash_radius > 0) {
-          if (emitVisuals) {
-            this.emitEffect(tx + 0.5, ty + 0.5, st.splash_radius, st.slow_factor > 0 ? "#38bdf8" : "#f97316", 0.22);
-          }
-          const srSq = st.splash_radius * st.splash_radius;
-          const sDmg = effDmg * st.splash_ratio;
-          for (const other of this.enemies) {
-            if (other.id === target.id || other.hp <= 0) continue;
-            const dx = other._px - tx, dy = other._py - ty;
-            if (dx * dx + dy * dy <= srSq) {
-              const sd = this.applyDamage(other, sDmg, t, st.armor_pierce, false, false, st.execute_pct);
-              if (sd > 0 && st.armor_shred > 0 && other.hp > 0) {
-                other.armorCurrent = Math.max(0, other.armorCurrent - st.armor_shred);
-              }
-              if (st.slow_factor > 0 && other.hp > 0 && !other.tpl.slow_immune) {
-                other.slowFactor = Math.max(other.slowFactor, st.slow_factor);
-                other.slowTimer = Math.max(other.slowTimer, st.slow_duration);
-              }
-              if (st.poison_dps > 0 && other.hp > 0) {
-                other.poisonDps = Math.max(other.poisonDps, st.poison_dps * t.buffDmg);
-                other.poisonTimer = Math.max(other.poisonTimer, st.poison_duration);
-                other.poisonSource = t;
-              }
-            }
-          }
-        }
-
-        if (st.chain_count > 1) {
-          const hitIds = new Set([target.id]);
-          let cx = tx, cy = ty;
-          let cdmg = effDmg * st.chain_falloff;
-          for (let c = 1; c < st.chain_count; c++) {
-            let bestN = null, bestDSq = 14.44; // 3.8^2
-            for (const cand of this.enemies) {
-              if (cand.hp <= 0 || hitIds.has(cand.id)) continue;
-              const dx = cand._px - cx, dy = cand._py - cy;
-              const dSq = dx * dx + dy * dy;
-              if (dSq <= bestDSq) {
-                bestDSq = dSq; bestN = cand;
-              }
-            }
-            if (!bestN) break;
-            hitIds.add(bestN.id);
-            if (emitVisuals) {
-              this.emitShot(cx + 0.5, cy + 0.5, bestN._px + 0.5, bestN._py + 0.5, D.TOWERS[t.kind].rarity, t.kind);
-            }
-            this.applyDamage(bestN, cdmg, t, st.armor_pierce, false, false, st.execute_pct);
-            if (st.stun_duration > 0 && bestN.hp > 0 && !bestN.tpl.is_boss) {
-              bestN.stunTimer = Math.max(bestN.stunTimer, st.stun_duration * 0.7);
-            }
-            cx = bestN._px; cy = bestN._py; cdmg *= st.chain_falloff;
-          }
+        if (fired > 0) {
+          t.cooldownLeft = Math.max(0, t.cooldownLeft + fired * effCd);
+        } else {
+          t.cooldownLeft = 0;
         }
       }
 

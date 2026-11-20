@@ -63,13 +63,15 @@ def build_wave_queue(wave_num: int) -> List[SpawnEntry]:
         return entries
 
     extra = wave_num - len(WAVE_DEFINITIONS)
-    hp_scale = 1.28 ** extra
+    # Smooth playable endless scaling without exploding entity counts or billion-HP stalls
+    hp_scale = (1.14 ** min(extra, 15)) * (1.0 + max(0, extra - 15) * 0.35)
+    c_scale = min(extra, 18)
     groups: Tuple[Tuple[str, int, float], ...] = (
-        ("void_stalker", 14 + extra, 0.30),
-        ("chrono_knight", 10 + extra, 0.42),
-        ("colossus", 8 + extra // 2, 0.75),
-        ("behemoth", 7 + extra // 2, 0.85),
-        ("boss_chronos" if extra % 2 == 1 else "boss_omega", 1 + extra // 3, 2.20),
+        ("void_stalker", 12 + c_scale, 0.28),
+        ("chrono_knight", 10 + (c_scale * 2) // 3, 0.38),
+        ("colossus", 6 + c_scale // 2, 0.65),
+        ("behemoth", 5 + c_scale // 2, 0.75),
+        ("boss_chronos" if extra % 2 == 1 else "boss_omega", min(5, 1 + extra // 5), 2.00),
     )
     for kind, count, interval in groups:
         for i in range(count):
